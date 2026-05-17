@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS bins (
     location TEXT NOT NULL,
     zone TEXT,
     capacity_liters INTEGER DEFAULT 0,
+    bin_height_cm REAL DEFAULT 30,
+    bin_width_cm REAL DEFAULT 0,
+    low_threshold_cm REAL DEFAULT 20,
+    medium_threshold_cm REAL DEFAULT 10,
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'maintenance', 'offline')),
     level TEXT NOT NULL DEFAULT 'unknown',
     sensor_status TEXT NOT NULL DEFAULT 'unknown',
@@ -147,6 +151,7 @@ def init_database():
     connection.row_factory = sqlite3.Row
     connection.execute('PRAGMA foreign_keys = ON')
     connection.executescript(SCHEMA)
+    ensure_bin_columns(connection)
     connection.execute("DROP TABLE IF EXISTS reports")
 
     admin_exists = connection.execute(
@@ -178,6 +183,19 @@ def init_database():
 
     connection.commit()
     connection.close()
+
+
+def ensure_bin_columns(connection):
+    columns = {row['name'] for row in connection.execute("PRAGMA table_info(bins)").fetchall()}
+    additions = {
+        'bin_height_cm': "ALTER TABLE bins ADD COLUMN bin_height_cm REAL DEFAULT 30",
+        'bin_width_cm': "ALTER TABLE bins ADD COLUMN bin_width_cm REAL DEFAULT 0",
+        'low_threshold_cm': "ALTER TABLE bins ADD COLUMN low_threshold_cm REAL DEFAULT 20",
+        'medium_threshold_cm': "ALTER TABLE bins ADD COLUMN medium_threshold_cm REAL DEFAULT 10",
+    }
+    for name, statement in additions.items():
+        if name not in columns:
+            connection.execute(statement)
 
 
 def init_app(app):

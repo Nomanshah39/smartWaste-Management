@@ -21,10 +21,10 @@ SERIAL_PORT = os.getenv('SERIAL_PORT', 'COM6')
 BAUD_RATE = int(os.getenv('BAUD_RATE', '115200'))
 SENSOR_API_KEY = os.getenv('SENSOR_API_KEY', 'my_ultrasonic_token')
 DEFAULT_DEVICE_ID = os.getenv('DEFAULT_DEVICE_ID', 'esp8266-ultrasonic')
-BIN_DEPTH_CM = float(os.getenv('BIN_DEPTH_CM', '30'))
-LOW_THRESHOLD_CM = float(os.getenv('LOW_THRESHOLD_CM', '20'))
-MEDIUM_THRESHOLD_CM = float(os.getenv('MEDIUM_THRESHOLD_CM', '10'))
-# distance > LOW_THRESHOLD_CM => low
-# MEDIUM_THRESHOLD_CM < distance <= LOW_THRESHOLD_CM => medium
-# distance <= MEDIUM_THRESHOLD_CM => high
+BIN_HEIGHT_CM = float(os.getenv('BIN_HEIGHT_CM', os.getenv('BIN_DEPTH_CM', '30')))
+LOW_FILL_THRESHOLD_PERCENT = float(os.getenv('LOW_FILL_THRESHOLD_PERCENT', '33'))
+MEDIUM_FILL_THRESHOLD_PERCENT = float(os.getenv('MEDIUM_FILL_THRESHOLD_PERCENT', '66'))
+# fill_percent < LOW_FILL_THRESHOLD_PERCENT => low
+# LOW_FILL_THRESHOLD_PERCENT <= fill_percent < MEDIUM_FILL_THRESHOLD_PERCENT => medium
+# fill_percent >= MEDIUM_FILL_THRESHOLD_PERCENT => high
 UPLOAD_DIR = os.path.join(BASE_DIR, 'uploads')

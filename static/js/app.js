@@ -756,6 +756,10 @@
           <div class="col-md-6"><label class="form-label">Location</label><input name="location" class="form-control" required /></div>
           <div class="col-md-6"><label class="form-label">Zone</label><input name="zone" class="form-control" /></div>
           <div class="col-md-6"><label class="form-label">Capacity (liters)</label><input name="capacityLiters" type="number" class="form-control" /></div>
+          <div class="col-md-6"><label class="form-label">Dustbin Height (cm)</label><input name="binHeightCm" type="number" step="0.01" min="0.01" class="form-control" value="30" /></div>
+          <div class="col-md-6"><label class="form-label">Dustbin Width (cm)</label><input name="binWidthCm" type="number" step="0.01" min="0" class="form-control" value="0" /></div>
+          <div class="col-md-6"><label class="form-label">Low Threshold Distance (cm)</label><input name="lowThresholdCm" type="number" step="0.01" min="0" class="form-control" value="20" /></div>
+          <div class="col-md-6"><label class="form-label">Medium Threshold Distance (cm)</label><input name="mediumThresholdCm" type="number" step="0.01" min="0" class="form-control" value="10" /></div>
           <div class="col-md-6"><label class="form-label">Status</label><select name="status" class="form-select">${statusOptions}</select></div>
           <div class="col-md-6"><label class="form-label">Level</label><input name="level" class="form-control" placeholder="low / medium / high / unknown" /></div>
           <div class="col-md-6"><label class="form-label">Sensor Status</label><input name="sensorStatus" class="form-control" /></div>
@@ -784,13 +788,14 @@
         <div class="content-card">
           <div class="card-title-row"><div><h5>${state.user.role === 'staff' ? 'My Bins' : 'Bins'}</h5><div class="text-muted small">Live bin list from SQLite</div></div></div>
           ${renderEntityTable(
-            ['Code', 'Location', 'Zone', 'Status', 'Level', 'Assigned', 'Actions'],
+            ['Code', 'Location', 'Height', 'Width', 'Thresholds', 'Status', 'Assigned', 'Actions'],
             bins.map(bin => [
               bin.binCode,
               bin.location,
-              bin.zone || '-',
+              `${bin.binHeightCm || '-'} cm`,
+              `${bin.binWidthCm || '-'} cm`,
+              `low ${bin.lowThresholdCm ?? '-'} / medium ${bin.mediumThresholdCm ?? '-'}`,
               renderStatusBadge(bin.status),
-              renderStatusBadge(bin.level),
               bin.assignedUserName || '-',
               state.user.role === 'staff' ? '-' : actionButtons('bin', bin.id)
             ]),
@@ -1062,6 +1067,10 @@
             <div class="col-md-6"><label class="form-label">Live Sensor Reading</label><input id="sensor-level-output" class="form-control" value="Waiting for sensor..." readonly /></div>
             <div class="col-md-6"><label class="form-label">Sensor Source</label><input id="sensor-source-output" class="form-control" value="Checking sensor source..." readonly /></div>
             <div class="col-md-6"><label class="form-label">Manual Sensor Distance (cm)</label><input name="sensor_distance_cm" class="form-control" type="number" step="0.01" /></div>
+            <div class="col-md-6"><label class="form-label">Dustbin Height (cm)</label><input name="bin_height_cm" class="form-control" type="number" step="0.01" min="0.01" value="30" /></div>
+            <div class="col-md-6"><label class="form-label">Dustbin Width (cm)</label><input name="bin_width_cm" class="form-control" type="number" step="0.01" min="0" value="0" /></div>
+            <div class="col-md-6"><label class="form-label">Low Threshold Distance (cm)</label><input name="low_threshold_cm" class="form-control" type="number" step="0.01" min="0" value="20" /></div>
+            <div class="col-md-6"><label class="form-label">Medium Threshold Distance (cm)</label><input name="medium_threshold_cm" class="form-control" type="number" step="0.01" min="0" value="10" /></div>
             <div class="col-md-6"><label class="form-label">Upload Image</label><input name="image" class="form-control" type="file" accept="image/*" required /></div>
             <div class="col-12 d-flex gap-2 justify-content-end">
               <button type="submit" class="btn btn-success">Run Validation</button>
@@ -1682,6 +1691,27 @@
   }
 
   async function mountValidationsPage(validations) {
+    const validationForm = document.getElementById('validation-form');
+    const selectedBinField = validationForm?.elements.namedItem('bin_id');
+    const syncValidationBinDetails = () => {
+      if (!validationForm) return;
+      const selectedBin = (state.lookups?.bins || []).find(bin => String(bin.id) === String(selectedBinField?.value || ''));
+      if (!selectedBin) return;
+      const mapping = {
+        location: selectedBin.location || '',
+        bin_height_cm: selectedBin.binHeightCm ?? 30,
+        bin_width_cm: selectedBin.binWidthCm ?? 0,
+        low_threshold_cm: selectedBin.lowThresholdCm ?? 20,
+        medium_threshold_cm: selectedBin.mediumThresholdCm ?? 10,
+      };
+      Object.entries(mapping).forEach(([name, value]) => {
+        const field = validationForm.elements.namedItem(name);
+        if (field && value !== undefined && value !== null) field.value = value;
+      });
+    };
+    selectedBinField?.addEventListener('change', syncValidationBinDetails);
+    syncValidationBinDetails();
+
     bindFormSubmit('validation-form', async event => {
       event.preventDefault();
       clearInlineFeedback('validation-feedback');
@@ -1762,9 +1792,10 @@
     try {
       const sensor = await api('/api/sensor/latest');
       const distance = typeof sensor.distance_cm === 'number' ? `${sensor.distance_cm.toFixed(2)} cm` : 'No reading';
+      const binHeight = typeof sensor.bin_height_cm === 'number' ? `${sensor.bin_height_cm.toFixed(2)} cm` : 'Unknown';
       const hasReading = typeof sensor.distance_cm === 'number' || typeof sensor.distance_inch === 'number';
       sensorField.value = hasReading
-        ? `${String(sensor.sensor_level || 'unknown').toUpperCase()} (${distance})`
+        ? `${String(sensor.sensor_level || 'unknown').toUpperCase()} (${distance} | Height: ${binHeight})`
         : 'Waiting for live sensor reading';
       sourceField.value = `${String(sensor.source || 'manual').toUpperCase()} | ${sensor.status || 'You can still enter a manual distance.'}`;
     } catch (error) {

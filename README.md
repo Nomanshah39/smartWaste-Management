@@ -93,6 +93,18 @@ pip install -r requirements.txt
 python train_model.py
 ```
 
+## Check model accuracy
+
+```powershell
+python evaluate_model.py
+```
+
+For JSON output:
+
+```powershell
+python evaluate_model.py --json
+```
+
 ## Run the app
 
 ```powershell

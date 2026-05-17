@@ -17,6 +17,7 @@ from werkzeug.utils import secure_filename
 
 from config import (
     BAUD_RATE,
+    BIN_HEIGHT_CM,
     CLASS_NAMES,
     DATABASE_PATH,
     DEFAULT_ADMIN_PASSWORD,
@@ -36,6 +37,7 @@ from database import execute, init_app as init_database_app, query_all, query_on
 from sensor_utils import (
     compare_levels,
     normalize_level_name,
+    resolve_fill_thresholds,
     sensor_distance_to_fill_percent,
     sensor_distance_to_level,
 )
@@ -87,6 +89,10 @@ latest_sensor = {
     'device_id': DEFAULT_DEVICE_ID,
     'distance_cm': None,
     'distance_inch': None,
+    'bin_height_cm': BIN_HEIGHT_CM,
+    'bin_width_cm': 0,
+    'low_threshold_percent': 33,
+    'medium_threshold_percent': 66,
     'fill_percent': None,
     'sensor_level': 'unknown',
     'source': SENSOR_MODE,
@@ -134,8 +140,15 @@ def parse_float(value, fallback=None):
         return fallback
 
 
-def parse_distance_value(value):
-    return parse_float(value, fallback=None)
+def parse_distance_value(value, fallback=None):
+    return parse_float(value, fallback=fallback)
+
+
+def parse_bin_dimension_value(value, fallback=None):
+    dimension = parse_float(value, fallback=fallback)
+    if dimension is None or dimension <= 0:
+        return fallback
+    return dimension
 
 
 def allowed_image(filename: str) -> bool:
@@ -214,6 +227,10 @@ def row_to_bin(row):
         'location': row['location'],
         'zone': row['zone'] or '',
         'capacityLiters': row['capacity_liters'] or 0,
+        'binHeightCm': row['bin_height_cm'] or BIN_HEIGHT_CM,
+        'binWidthCm': row['bin_width_cm'] or 0,
+        'lowThresholdCm': row['low_threshold_cm'],
+        'mediumThresholdCm': row['medium_threshold_cm'],
         'status': row['status'],
         'level': row['level'],
         'sensorStatus': row['sensor_status'],
@@ -340,29 +357,57 @@ def get_legacy_sensor_snapshot():
     return {
         'cm': snapshot.get('distance_cm'),
         'inch': snapshot.get('distance_inch'),
+        'bin_height_cm': snapshot.get('bin_height_cm'),
+        'bin_width_cm': snapshot.get('bin_width_cm'),
         'raw': snapshot.get('raw', ''),
         'status': snapshot.get('status', default_sensor_status()),
     }
 
 
-def update_sensor_snapshot(distance_cm=None, distance_inch=None, raw='', source='manual', device_id=None, status=None):
+def update_sensor_snapshot(
+    distance_cm=None,
+    distance_inch=None,
+    raw='',
+    source='manual',
+    device_id=None,
+    status=None,
+    bin_height_cm=None,
+    bin_width_cm=None,
+    low_threshold_percent=None,
+    medium_threshold_percent=None,
+):
     distance_cm = parse_distance_value(distance_cm)
     distance_inch = parse_distance_value(distance_inch)
+    bin_height_cm = parse_bin_dimension_value(bin_height_cm, BIN_HEIGHT_CM)
+    bin_width_cm = parse_bin_dimension_value(bin_width_cm, 0)
+    low_threshold_percent, medium_threshold_percent = resolve_fill_thresholds(
+        low_threshold_percent,
+        medium_threshold_percent,
+    )
 
     if distance_cm is None and distance_inch is not None:
         distance_cm = round(distance_inch * 2.54, 2)
     if distance_inch is None and distance_cm is not None:
         distance_inch = round(distance_cm / 2.54, 2)
 
-    sensor_level = sensor_distance_to_level(distance_cm)
-    fill_percent = sensor_distance_to_fill_percent(distance_cm)
+    sensor_level = sensor_distance_to_level(
+        distance_cm,
+        bin_height_cm,
+        low_threshold_percent,
+        medium_threshold_percent,
+    )
+    fill_percent = sensor_distance_to_fill_percent(distance_cm, bin_height_cm)
 
     with sensor_lock:
         latest_sensor['device_id'] = device_id or latest_sensor['device_id']
-        latest_sensor['distance_cm'] = distance_cm
-        latest_sensor['distance_inch'] = distance_inch
-        latest_sensor['fill_percent'] = fill_percent
-        latest_sensor['sensor_level'] = sensor_level
+        latest_sensor['distance_cm'] = distance_cm if distance_cm is not None else latest_sensor.get('distance_cm')
+        latest_sensor['distance_inch'] = distance_inch if distance_inch is not None else latest_sensor.get('distance_inch')
+        latest_sensor['bin_height_cm'] = bin_height_cm
+        latest_sensor['bin_width_cm'] = bin_width_cm
+        latest_sensor['low_threshold_percent'] = low_threshold_percent
+        latest_sensor['medium_threshold_percent'] = medium_threshold_percent
+        latest_sensor['fill_percent'] = fill_percent if fill_percent is not None else latest_sensor.get('fill_percent')
+        latest_sensor['sensor_level'] = sensor_level if sensor_level != 'unknown' else latest_sensor.get('sensor_level', 'unknown')
         latest_sensor['source'] = source
         latest_sensor['raw'] = raw
         latest_sensor['status'] = status or f'{source.title()} sensor updated successfully'
@@ -494,16 +539,42 @@ def predict_image_class(image_path: str):
     }
 
 
-def resolve_sensor_values(form_data):
+def resolve_sensor_values(form_data, bin_row=None):
     manual_distance_cm = parse_distance_value(form_data.get('sensor_distance_cm'))
     manual_level = normalize_level_name(form_data.get('sensor_level'))
     live_sensor = get_sensor_snapshot()
+    bin_height_cm = parse_bin_dimension_value(
+        form_data.get('bin_height_cm'),
+        (bin_row['bin_height_cm'] if bin_row and bin_row['bin_height_cm'] else live_sensor.get('bin_height_cm', BIN_HEIGHT_CM)),
+    )
+    bin_width_cm = parse_bin_dimension_value(
+        form_data.get('bin_width_cm'),
+        (bin_row['bin_width_cm'] if bin_row and bin_row['bin_width_cm'] else live_sensor.get('bin_width_cm', 0)),
+    )
+    low_threshold_cm = parse_distance_value(
+        form_data.get('low_threshold_cm') if form_data.get('low_threshold_cm') not in (None, '') else (bin_row['low_threshold_cm'] if bin_row else None)
+    )
+    medium_threshold_cm = parse_distance_value(
+        form_data.get('medium_threshold_cm') if form_data.get('medium_threshold_cm') not in (None, '') else (bin_row['medium_threshold_cm'] if bin_row else None)
+    )
+    low_threshold_percent = None
+    medium_threshold_percent = None
+    if bin_height_cm:
+        if low_threshold_cm is not None:
+            low_threshold_percent = max(0.0, min(100.0, round(100.0 * (1.0 - (low_threshold_cm / bin_height_cm)), 2)))
+        if medium_threshold_cm is not None:
+            medium_threshold_percent = max(0.0, min(100.0, round(100.0 * (1.0 - (medium_threshold_cm / bin_height_cm)), 2)))
+    low_threshold_percent, medium_threshold_percent = resolve_fill_thresholds(low_threshold_percent, medium_threshold_percent)
 
     if manual_distance_cm is not None:
         return {
             'distance_cm': manual_distance_cm,
-            'level': sensor_distance_to_level(manual_distance_cm),
-            'fill_percent': sensor_distance_to_fill_percent(manual_distance_cm),
+            'bin_height_cm': bin_height_cm,
+            'bin_width_cm': bin_width_cm,
+            'low_threshold_percent': low_threshold_percent,
+            'medium_threshold_percent': medium_threshold_percent,
+            'level': sensor_distance_to_level(manual_distance_cm, bin_height_cm, low_threshold_percent, medium_threshold_percent),
+            'fill_percent': sensor_distance_to_fill_percent(manual_distance_cm, bin_height_cm),
             'source': 'manual',
             'status': 'Manual ultrasonic distance entered in the dashboard',
         }
@@ -511,6 +582,10 @@ def resolve_sensor_values(form_data):
     if manual_level != 'unknown':
         return {
             'distance_cm': None,
+            'bin_height_cm': bin_height_cm,
+            'bin_width_cm': bin_width_cm,
+            'low_threshold_percent': low_threshold_percent,
+            'medium_threshold_percent': medium_threshold_percent,
             'level': manual_level,
             'fill_percent': None,
             'source': 'manual',
@@ -519,8 +594,17 @@ def resolve_sensor_values(form_data):
 
     return {
         'distance_cm': live_sensor.get('distance_cm'),
-        'level': live_sensor.get('sensor_level', 'unknown'),
-        'fill_percent': live_sensor.get('fill_percent'),
+        'bin_height_cm': bin_height_cm,
+        'bin_width_cm': bin_width_cm,
+        'low_threshold_percent': low_threshold_percent,
+        'medium_threshold_percent': medium_threshold_percent,
+        'level': sensor_distance_to_level(
+            live_sensor.get('distance_cm'),
+            bin_height_cm,
+            low_threshold_percent,
+            medium_threshold_percent,
+        ),
+        'fill_percent': sensor_distance_to_fill_percent(live_sensor.get('distance_cm'), bin_height_cm),
         'source': live_sensor.get('source', 'unknown'),
         'status': live_sensor.get('status', default_sensor_status()),
     }
@@ -992,15 +1076,20 @@ def api_bins_create():
     cursor = execute(
         """
         INSERT INTO bins (
-            bin_code, location, zone, capacity_liters, status, level, sensor_status, assigned_user_id,
-            last_cleaned, notes, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            bin_code, location, zone, capacity_liters, bin_height_cm, bin_width_cm, low_threshold_cm,
+            medium_threshold_cm, status, level, sensor_status, assigned_user_id, last_cleaned, notes,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             bin_code,
             location,
             sanitize_text(payload.get('zone')),
             parse_int(payload.get('capacityLiters'), 0),
+            parse_bin_dimension_value(payload.get('binHeightCm'), BIN_HEIGHT_CM),
+            parse_bin_dimension_value(payload.get('binWidthCm'), 0),
+            parse_distance_value(payload.get('lowThresholdCm'), 20),
+            parse_distance_value(payload.get('mediumThresholdCm'), 10),
             status,
             sanitize_text(payload.get('level'), 'unknown').lower(),
             sanitize_text(payload.get('sensorStatus'), 'unknown'),
@@ -1043,7 +1132,8 @@ def api_bins_update(bin_id):
     execute(
         """
         UPDATE bins
-        SET bin_code = ?, location = ?, zone = ?, capacity_liters = ?, status = ?, level = ?,
+        SET bin_code = ?, location = ?, zone = ?, capacity_liters = ?, bin_height_cm = ?, bin_width_cm = ?,
+            low_threshold_cm = ?, medium_threshold_cm = ?, status = ?, level = ?,
             sensor_status = ?, assigned_user_id = ?, last_cleaned = ?, notes = ?, updated_at = ?
         WHERE id = ?
         """,
@@ -1052,6 +1142,10 @@ def api_bins_update(bin_id):
             location,
             sanitize_text(payload.get('zone'), existing['zone'] or ''),
             parse_int(payload.get('capacityLiters'), existing['capacity_liters'] or 0),
+            parse_bin_dimension_value(payload.get('binHeightCm'), existing['bin_height_cm'] or BIN_HEIGHT_CM),
+            parse_bin_dimension_value(payload.get('binWidthCm'), existing['bin_width_cm'] or 0),
+            parse_distance_value(payload.get('lowThresholdCm'), existing['low_threshold_cm']),
+            parse_distance_value(payload.get('mediumThresholdCm'), existing['medium_threshold_cm']),
             status,
             sanitize_text(payload.get('level'), existing['level']).lower(),
             sanitize_text(payload.get('sensorStatus'), existing['sensor_status']),
@@ -1419,6 +1513,8 @@ def api_reading():
         raw=json.dumps(payload, ensure_ascii=True),
         source='http',
         device_id=sanitize_text(payload.get('device_id'), DEFAULT_DEVICE_ID),
+        bin_height_cm=parse_bin_dimension_value(payload.get('bin_height_cm'), BIN_HEIGHT_CM),
+        bin_width_cm=parse_bin_dimension_value(payload.get('bin_width_cm'), 0),
         status='HTTP sensor update received',
     )
     return jsonify(snapshot)
@@ -1460,7 +1556,7 @@ def api_validate():
         app.logger.exception('Failed to process uploaded validation image')
         return jsonify({'error': 'unable to process the uploaded image. Please try another clear bin photo.'}), 500
 
-    sensor_values = resolve_sensor_values(request.form)
+    sensor_values = resolve_sensor_values(request.form, bin_row)
     match = compare_levels(prediction['ai_level'], sensor_values['level'])
     now = utc_now()
 
