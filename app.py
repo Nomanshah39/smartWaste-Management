@@ -1043,7 +1043,7 @@ def dashboard_payload(user):
             {'label': 'Sensor vs AI Discrepancies', 'value': mismatches, 'subtext': 'Mismatch records'},
         ]
         role_title = 'Admin - System Controller & Validator'
-        role_description = 'Responsible for system setup, user management, smart bin configuration, AI validation, monitoring, backup, and all reports.'
+        role_description = 'Responsible for system setup, user management, smart bin configuration, AI validation, discrepancy review, and all reports.'
     elif user['role'] == 'city_head':
         staff = fetch_staff_for_city_head(user)
         completed = len([task for task in tasks if task['status'] == 'completed'])

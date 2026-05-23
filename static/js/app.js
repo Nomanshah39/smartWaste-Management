@@ -3,14 +3,10 @@
     admin: [
       { key: 'dashboard', label: 'Dashboard', icon: 'bi-speedometer2' },
       { key: 'users', label: 'User Management', icon: 'bi-people' },
-      { key: 'staff_management', label: 'Staff Management', icon: 'bi-person-badge' },
-      { key: 'city_head_management', label: 'City Head Management', icon: 'bi-buildings' },
       { key: 'bins', label: 'Smart Bin Management', icon: 'bi-trash3' },
       { key: 'zones', label: 'Zone & Route Setup', icon: 'bi-map' },
       { key: 'validations', label: 'AI Validation', icon: 'bi-cpu' },
       { key: 'discrepancy_reports', label: 'Discrepancy Reports', icon: 'bi-exclamation-triangle' },
-      { key: 'system_monitoring', label: 'System Monitoring', icon: 'bi-activity' },
-      { key: 'backup_restore', label: 'Backup & Restore', icon: 'bi-database-check' },
       { key: 'reports', label: 'All Reports', icon: 'bi-bar-chart' }
     ],
     city_head: [
@@ -356,8 +352,6 @@
     switch (route) {
       case 'dashboard': return api('/api/dashboard');
       case 'users': return api('/api/users');
-      case 'staff_management': return api('/api/users');
-      case 'city_head_management': return api('/api/users');
       case 'bins': return api('/api/bins');
       case 'bin_fill_levels': return api('/api/bins');
       case 'zones': return api('/api/zones');
@@ -372,8 +366,6 @@
       case 'operational_reports': return api('/api/reports');
       case 'validations': return api('/api/validations');
       case 'discrepancy_reports': return api('/api/validations');
-      case 'system_monitoring': return api('/api/system-monitoring');
-      case 'backup_restore': return api('/api/backup');
       case 'staff_performance': return api('/api/reports');
       case 'shift_route_schedule': return api('/api/reports');
       case 'profile': return (await api('/api/auth/me')).user;
@@ -385,8 +377,6 @@
     return {
       dashboard: 'Dashboard',
       users: 'User Management',
-      staff_management: 'Staff Management',
-      city_head_management: 'City Head Management',
       bins: 'Bin Management',
       bin_fill_levels: 'Bin Fill Levels',
       zones: 'Zone & Route Setup',
@@ -401,8 +391,6 @@
       operational_reports: 'Operational Reports',
       validations: 'AI Validation',
       discrepancy_reports: 'Sensor vs AI Discrepancy Reports',
-      system_monitoring: 'System Monitoring',
-      backup_restore: 'Backup & Restore',
       staff_performance: 'Staff Performance',
       shift_route_schedule: 'Shift & Route Schedule',
       profile: 'Profile'
@@ -413,8 +401,6 @@
     switch (route) {
       case 'dashboard': return renderDashboard(data);
       case 'users': return renderUsersPage(data);
-      case 'staff_management': return renderUsersPage(data.filter(user => user.role === 'staff'), { forcedRole: 'staff', title: 'Staff Management' });
-      case 'city_head_management': return renderUsersPage(data.filter(user => user.role === 'city_head'), { forcedRole: 'city_head', title: 'City Head Management' });
       case 'bins': return renderBinsPage(data);
       case 'bin_fill_levels': return renderBinsPage(data, { readOnly: true, title: 'Assigned-Zone Bin Fill Levels' });
       case 'zones': return renderZonesPage(data);
@@ -429,8 +415,6 @@
       case 'operational_reports': return renderReportsPage(data, { title: 'Operational Reports', cityHeadMode: true });
       case 'validations': return renderValidationsPage(data);
       case 'discrepancy_reports': return renderDiscrepancyReportsPage(data);
-      case 'system_monitoring': return renderSystemMonitoringPage(data);
-      case 'backup_restore': return renderBackupRestorePage(data);
       case 'staff_performance': return renderStaffPerformancePage(data);
       case 'shift_route_schedule': return renderShiftRouteSchedulePage(data);
       case 'profile': return renderProfilePage(data);
@@ -663,8 +647,7 @@
         ['bins', 'Smart Bins', 'btn-outline-success'],
         ['zones', 'Zone & Route Setup', 'btn-outline-secondary'],
         ['validations', 'AI Validation', 'btn-outline-danger'],
-        ['system_monitoring', 'System Monitoring', 'btn-outline-dark'],
-        ['backup_restore', 'Backup & Restore', 'btn-outline-dark']
+        ['reports', 'All Reports', 'btn-outline-dark']
       ]
       : isCityHead
         ? [
@@ -774,7 +757,7 @@
                   ? [
                     ['All Reports', 'Users, bins, zones, tasks, and validation runs', 'System-wide audit and exports'],
                     ['Discrepancy Reports', 'Sensor versus AI mismatches', 'Validation and calibration review'],
-                    ['System Monitoring', 'Health, counts, and sensor state', 'Operational oversight']
+                    ['AI Validation', 'Image analysis and sensor comparison', 'Validation and calibration review']
                   ]
                   : [
                     ['Zone Reports', 'Assigned zones, bins, staff, and tasks', 'Zone-specific reporting only'],
@@ -1349,78 +1332,6 @@
     `;
   }
 
-  function renderSystemMonitoringPage(data) {
-    const counts = data.counts || {};
-    return `
-      <div class="section-grid">
-        ${renderPageHero('System Monitoring', 'Admin view of global system health, data counts, model availability, and sensor status.')}
-        ${renderMetricCards([
-          { label: 'Status', value: titleCase(data.status || 'unknown'), subtext: 'Application health' },
-          { label: 'Users', value: counts.users || 0, subtext: 'All accounts' },
-          { label: 'Smart Bins', value: counts.bins || 0, subtext: 'All bins' },
-          { label: 'Discrepancies', value: counts.discrepancies || 0, subtext: 'AI mismatch records' }
-        ])}
-        <div class="section-grid two-col">
-          <div class="content-card">
-            <div class="card-title-row"><div><h5>System Health</h5><div class="text-muted small">Backend-controlled details</div></div></div>
-            ${renderSimpleTable(
-              ['Item', 'Value'],
-              [
-                ['Database', data.databasePath || '-'],
-                ['AI Model', data.modelPath || '-'],
-                ['Model Available', data.modelExists ? renderStatusBadge('active') : renderStatusBadge('missing')],
-                ['Sensor Source', data.sensor?.source || '-'],
-                ['Sensor Status', data.sensor?.status || '-']
-              ],
-              'No health details available'
-            )}
-          </div>
-          <div class="content-card">
-            <div class="card-title-row"><div><h5>Global Counts</h5><div class="text-muted small">Admin sees all data</div></div></div>
-            ${renderSimpleTable(
-              ['Dataset', 'Count'],
-              Object.entries(counts).map(([key, value]) => [titleCase(key.replace(/([A-Z])/g, ' $1')), value]),
-              'No counts available'
-            )}
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  function renderBackupRestorePage(data) {
-    const backups = data.backups || [];
-    const backupOptions = optionTags(backups, null, item => `${item.name} (${Math.round((item.sizeBytes || 0) / 1024)} KB)`, item => item.name);
-    return `
-      <div class="section-grid">
-        ${renderPageHero('Backup & Restore', 'Admin-only SQLite backup creation and restore access.')}
-        ${renderInlineFeedback('backup-feedback')}
-        <div class="section-grid two-col">
-          <div class="content-card">
-            <div class="card-title-row"><div><h5>Create Backup</h5><div class="text-muted small">Creates a timestamped copy of the current SQLite database</div></div></div>
-            <button type="button" id="create-backup-btn" class="btn btn-success btn-lg">Create Backup</button>
-          </div>
-          <div class="content-card">
-            <div class="card-title-row"><div><h5>Restore Backup</h5><div class="text-muted small">Restores from a saved backup after preserving the current database</div></div></div>
-            <form id="restore-form" class="row g-3">
-              <div class="col-12"><label class="form-label">Backup File</label><select name="backupName" class="form-select"><option value="">Select backup</option>${backupOptions}</select></div>
-              <div class="col-12 d-flex justify-content-end"><button type="submit" class="btn btn-outline-danger">Restore Selected Backup</button></div>
-            </form>
-          </div>
-        </div>
-        <div class="content-card">
-          <div class="card-title-row"><div><h5>Available Backups</h5><div class="text-muted small">Files stored in the project backup folder</div></div><span class="kpi-chip">${backups.length} files</span></div>
-          ${renderEntityTable(
-            ['File', 'Size', 'Updated'],
-            backups.map(item => [item.name, `${Math.round((item.sizeBytes || 0) / 1024)} KB`, formatDateTime(item.updatedAt)]),
-            'No backups have been created yet',
-            { datatable: true, tableId: 'backup-table', searchPlaceholder: 'Search backups' }
-          )}
-        </div>
-      </div>
-    `;
-  }
-
   function renderStaffPerformancePage(data) {
     const tasks = data.tasks || [];
     const staff = data.users || [];
@@ -1799,8 +1710,6 @@
     switch (route) {
       case 'dashboard': mountDashboard(data); break;
       case 'users': mountUsersPage(data); break;
-      case 'staff_management': mountUsersPage(data); break;
-      case 'city_head_management': mountUsersPage(data); break;
       case 'bins': mountBinsPage(data); break;
       case 'bin_fill_levels': break;
       case 'zones': mountZonesPage(data); break;
@@ -1815,8 +1724,6 @@
       case 'operational_reports': mountReportsPage(data); break;
       case 'validations': await mountValidationsPage(data); break;
       case 'discrepancy_reports': break;
-      case 'system_monitoring': break;
-      case 'backup_restore': mountBackupRestorePage(); break;
       case 'staff_performance': break;
       case 'shift_route_schedule': break;
       case 'profile': mountProfilePage(); break;
@@ -1965,38 +1872,6 @@
           showActionError('user-feedback', error, 'Unable to delete the user.');
         }
       });
-    });
-  }
-
-  async function mountBackupRestorePage() {
-    document.getElementById('create-backup-btn')?.addEventListener('click', async () => {
-      clearInlineFeedback('backup-feedback');
-      try {
-        await api('/api/backup', { method: 'POST' });
-        await reloadCurrentPage();
-        showActionSuccess('backup-feedback', 'Backup created successfully.');
-      } catch (error) {
-        showActionError('backup-feedback', error, 'Unable to create backup.');
-      }
-    });
-
-    bindFormSubmit('restore-form', async event => {
-      event.preventDefault();
-      clearInlineFeedback('backup-feedback');
-      const payload = Object.fromEntries(new FormData(event.target).entries());
-      if (!payload.backupName) {
-        showActionError('backup-feedback', new Error('Select a backup before restoring.'), 'Select a backup before restoring.');
-        return;
-      }
-      if (!window.confirm(`Restore backup "${payload.backupName}"? The current database will be backed up first.`)) return;
-      try {
-        await api('/api/restore', { method: 'POST', body: payload });
-        await refreshLookups();
-        await reloadCurrentPage();
-        showActionSuccess('backup-feedback', 'Backup restored successfully.');
-      } catch (error) {
-        showActionError('backup-feedback', error, 'Unable to restore backup.');
-      }
     });
   }
 
