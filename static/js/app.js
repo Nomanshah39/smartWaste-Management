@@ -2,20 +2,28 @@
   const ROUTES = {
     admin: [
       { key: 'dashboard', label: 'Dashboard', icon: 'bi-speedometer2' },
-      { key: 'users', label: 'Users', icon: 'bi-people' },
-      { key: 'bins', label: 'Bins', icon: 'bi-trash3' },
-      { key: 'tasks', label: 'Tasks', icon: 'bi-list-task' },
-      { key: 'alerts', label: 'Alerts', icon: 'bi-bell' },
-      { key: 'reports', label: 'Reports', icon: 'bi-bar-chart' },
-      { key: 'validations', label: 'AI Validation', icon: 'bi-cpu' }
+      { key: 'users', label: 'User Management', icon: 'bi-people' },
+      { key: 'staff_management', label: 'Staff Management', icon: 'bi-person-badge' },
+      { key: 'city_head_management', label: 'City Head Management', icon: 'bi-buildings' },
+      { key: 'bins', label: 'Smart Bin Management', icon: 'bi-trash3' },
+      { key: 'zones', label: 'Zone & Route Setup', icon: 'bi-map' },
+      { key: 'validations', label: 'AI Validation', icon: 'bi-cpu' },
+      { key: 'discrepancy_reports', label: 'Discrepancy Reports', icon: 'bi-exclamation-triangle' },
+      { key: 'system_monitoring', label: 'System Monitoring', icon: 'bi-activity' },
+      { key: 'backup_restore', label: 'Backup & Restore', icon: 'bi-database-check' },
+      { key: 'reports', label: 'All Reports', icon: 'bi-bar-chart' }
     ],
     city_head: [
       { key: 'dashboard', label: 'Dashboard', icon: 'bi-speedometer2' },
-      { key: 'bins', label: 'Bins', icon: 'bi-trash3' },
-      { key: 'tasks', label: 'Tasks', icon: 'bi-list-task' },
-      { key: 'alerts', label: 'Alerts', icon: 'bi-bell' },
-      { key: 'reports', label: 'Reports', icon: 'bi-bar-chart' },
-      { key: 'validations', label: 'AI Validation', icon: 'bi-cpu' }
+      { key: 'assigned_zones', label: 'Assigned Zones', icon: 'bi-map' },
+      { key: 'bin_fill_levels', label: 'Bin Fill Levels', icon: 'bi-trash3' },
+      { key: 'collection_progress', label: 'Collection Progress', icon: 'bi-clipboard2-check' },
+      { key: 'staff_task_assignment', label: 'Staff Task Assignment', icon: 'bi-list-task' },
+      { key: 'staff_performance', label: 'Staff Performance', icon: 'bi-graph-up-arrow' },
+      { key: 'shift_route_schedule', label: 'Shift & Route Schedule', icon: 'bi-calendar2-week' },
+      { key: 'overflow_emergency', label: 'Overflow Emergency Handling', icon: 'bi-bell' },
+      { key: 'zone_reports', label: 'Zone Reports', icon: 'bi-file-earmark-bar-graph' },
+      { key: 'operational_reports', label: 'Operational Reports', icon: 'bi-bar-chart' }
     ],
     staff: [
       { key: 'dashboard', label: 'Dashboard', icon: 'bi-speedometer2' },
@@ -188,6 +196,9 @@
 
     if (!response.ok) {
       let message = typeof payload === 'string' ? payload : payload?.error || payload?.message || '';
+      if (response.status === 403 && (!message || message === 'forbidden')) {
+        message = 'You do not have permission to access this page.';
+      }
       if (!message || /^<!doctype html/i.test(message) || /^<html/i.test(message)) {
         if (response.status === 401) message = 'Your session has expired. Please log in again.';
         else if (response.status === 403) message = 'You do not have permission to perform this action.';
@@ -294,7 +305,8 @@
 
     el.sidebarUserName.textContent = state.user.fullName;
     el.sidebarUserRole.textContent = titleCase(state.user.role.replace('_', ' '));
-    el.sidebarUserMeta.textContent = `${state.user.city || 'Smart City'} | ${state.user.zone || 'N/A'} | ${state.user.meta || 'SQLite-backed account'}`;
+    const assignedZones = (state.user.assignedZones || []).length ? state.user.assignedZones.join(', ') : (state.user.zone || 'N/A');
+    el.sidebarUserMeta.textContent = `${state.user.city || 'Smart City'} | ${assignedZones} | ${state.user.meta || 'SQLite-backed account'}`;
 
     el.sidebarNav.innerHTML = ROUTES[state.user.role].map(item => `
       <a href="#" class="nav-link ${item.key === state.route ? 'active' : ''}" data-route="${item.key}">
@@ -326,14 +338,16 @@
       const dataTables = initializeDataTables();
       mountPageEnhancements(state.route, state.pageData, dataTables);
     } catch (error) {
-      el.contentArea.innerHTML = `
-        <div class="content-card">
-          <div class="alert alert-danger mb-0">
-            <strong>Unable to load this page.</strong><br>
-            ${escapeHtml(error.message)}
+      el.contentArea.innerHTML = String(error.message || '').includes('permission')
+        ? renderAccessDeniedPage()
+        : `
+          <div class="content-card">
+            <div class="alert alert-danger mb-0">
+              <strong>Unable to load this page.</strong><br>
+              ${escapeHtml(error.message)}
+            </div>
           </div>
-        </div>
-      `;
+        `;
       showToast(error.message, 'danger');
     }
   }
@@ -342,11 +356,26 @@
     switch (route) {
       case 'dashboard': return api('/api/dashboard');
       case 'users': return api('/api/users');
+      case 'staff_management': return api('/api/users');
+      case 'city_head_management': return api('/api/users');
       case 'bins': return api('/api/bins');
+      case 'bin_fill_levels': return api('/api/bins');
+      case 'zones': return api('/api/zones');
+      case 'assigned_zones': return api('/api/zones');
       case 'tasks': return api('/api/tasks');
+      case 'collection_progress': return api('/api/tasks');
+      case 'staff_task_assignment': return api('/api/tasks');
       case 'alerts': return api('/api/alerts');
+      case 'overflow_emergency': return api('/api/alerts');
       case 'reports': return api('/api/reports');
+      case 'zone_reports': return api('/api/reports');
+      case 'operational_reports': return api('/api/reports');
       case 'validations': return api('/api/validations');
+      case 'discrepancy_reports': return api('/api/validations');
+      case 'system_monitoring': return api('/api/system-monitoring');
+      case 'backup_restore': return api('/api/backup');
+      case 'staff_performance': return api('/api/reports');
+      case 'shift_route_schedule': return api('/api/reports');
       case 'profile': return (await api('/api/auth/me')).user;
       default: return {};
     }
@@ -356,11 +385,26 @@
     return {
       dashboard: 'Dashboard',
       users: 'User Management',
+      staff_management: 'Staff Management',
+      city_head_management: 'City Head Management',
       bins: 'Bin Management',
+      bin_fill_levels: 'Bin Fill Levels',
+      zones: 'Zone & Route Setup',
+      assigned_zones: 'Assigned Zones',
       tasks: 'Task Management',
+      collection_progress: 'Collection Progress',
+      staff_task_assignment: 'Staff Task Assignment',
       alerts: 'Alerts',
+      overflow_emergency: 'Overflow Emergency Handling',
       reports: 'Reports',
+      zone_reports: 'Zone Reports',
+      operational_reports: 'Operational Reports',
       validations: 'AI Validation',
+      discrepancy_reports: 'Sensor vs AI Discrepancy Reports',
+      system_monitoring: 'System Monitoring',
+      backup_restore: 'Backup & Restore',
+      staff_performance: 'Staff Performance',
+      shift_route_schedule: 'Shift & Route Schedule',
       profile: 'Profile'
     }[route] || 'Dashboard';
   }
@@ -369,13 +413,28 @@
     switch (route) {
       case 'dashboard': return renderDashboard(data);
       case 'users': return renderUsersPage(data);
+      case 'staff_management': return renderUsersPage(data.filter(user => user.role === 'staff'), { forcedRole: 'staff', title: 'Staff Management' });
+      case 'city_head_management': return renderUsersPage(data.filter(user => user.role === 'city_head'), { forcedRole: 'city_head', title: 'City Head Management' });
       case 'bins': return renderBinsPage(data);
+      case 'bin_fill_levels': return renderBinsPage(data, { readOnly: true, title: 'Assigned-Zone Bin Fill Levels' });
+      case 'zones': return renderZonesPage(data);
+      case 'assigned_zones': return renderZonesPage(data, { readOnly: true, title: 'Assigned Zones' });
       case 'tasks': return renderTasksPage(data);
+      case 'collection_progress': return renderCollectionProgressPage(data);
+      case 'staff_task_assignment': return renderTasksPage(data, { title: 'Staff Task Assignment' });
       case 'alerts': return renderAlertsPage(data);
+      case 'overflow_emergency': return renderAlertsPage(data, { title: 'Overflow Emergency Handling', emergencyMode: true });
       case 'reports': return renderReportsPage(data);
+      case 'zone_reports': return renderReportsPage(data, { title: 'Zone Reports', cityHeadMode: true });
+      case 'operational_reports': return renderReportsPage(data, { title: 'Operational Reports', cityHeadMode: true });
       case 'validations': return renderValidationsPage(data);
+      case 'discrepancy_reports': return renderDiscrepancyReportsPage(data);
+      case 'system_monitoring': return renderSystemMonitoringPage(data);
+      case 'backup_restore': return renderBackupRestorePage(data);
+      case 'staff_performance': return renderStaffPerformancePage(data);
+      case 'shift_route_schedule': return renderShiftRouteSchedulePage(data);
       case 'profile': return renderProfilePage(data);
-      default: return `<div class="content-card">Unknown page</div>`;
+      default: return renderAccessDeniedPage();
     }
   }
 
@@ -595,10 +654,37 @@
   function renderDashboard(data) {
     const taskStatusCounts = summarizeByKey(data.recentTasks || [], 'status');
     const validationCounts = summarizeByKey(data.recentValidations || [], 'match');
+    const isAdmin = state.user.role === 'admin';
+    const isCityHead = state.user.role === 'city_head';
+    const zones = data.assignedZones || [];
+    const quickActions = isAdmin
+      ? [
+        ['users', 'User Management', 'btn-success'],
+        ['bins', 'Smart Bins', 'btn-outline-success'],
+        ['zones', 'Zone & Route Setup', 'btn-outline-secondary'],
+        ['validations', 'AI Validation', 'btn-outline-danger'],
+        ['system_monitoring', 'System Monitoring', 'btn-outline-dark'],
+        ['backup_restore', 'Backup & Restore', 'btn-outline-dark']
+      ]
+      : isCityHead
+        ? [
+          ['assigned_zones', 'Assigned Zones', 'btn-success'],
+          ['bin_fill_levels', 'Bin Fill Levels', 'btn-outline-success'],
+          ['staff_task_assignment', 'Assign Staff Tasks', 'btn-outline-secondary'],
+          ['collection_progress', 'Collection Progress', 'btn-outline-dark'],
+          ['overflow_emergency', 'Overflow Handling', 'btn-outline-danger'],
+          ['zone_reports', 'Zone Reports', 'btn-outline-dark']
+        ]
+        : [
+          ['tasks', 'My Tasks', 'btn-success'],
+          ['bins', 'My Bins', 'btn-outline-success'],
+          ['alerts', 'Alerts', 'btn-outline-secondary'],
+          ['profile', 'Profile', 'btn-outline-dark']
+        ];
 
     return `
       <div class="section-grid">
-        ${renderPageHero('Operations Snapshot', 'The previous richer dashboard style is back, now powered by live SQLite data.')}
+        ${renderPageHero(data.roleTitle || 'Dashboard', data.roleDescription || 'SmartWaste operations overview.')}
         ${renderMetricCards(data.metrics || [])}
 
         <div class="section-grid two-col">
@@ -609,13 +695,24 @@
               ${Object.entries(taskStatusCounts).map(([label, value]) => `<div class="col-md-4"><div class="soft-stat"><div class="soft-stat-label">${escapeHtml(label)}</div><div class="soft-stat-value">${escapeHtml(value)}</div></div></div>`).join('')}
             </div>
           </div>
-          <div class="chart-card">
+          ${isAdmin ? `<div class="chart-card">
             <div class="card-title-row"><div><h5>Validation Results</h5><div class="text-muted small">Recent AI versus sensor comparison outcomes</div></div><span class="kpi-chip">${(data.recentValidations || []).length} recent validations</span></div>
             <div class="chart-wrap"><canvas id="dashboard-validation-chart"></canvas></div>
             <div class="row g-3 mt-1">
               ${Object.entries(validationCounts).map(([label, value]) => `<div class="col-md-4"><div class="soft-stat"><div class="soft-stat-label">${escapeHtml(label)}</div><div class="soft-stat-value">${escapeHtml(value)}</div></div></div>`).join('')}
             </div>
-          </div>
+          </div>` : `<div class="content-card">
+            <div class="card-title-row"><div><h5>${isCityHead ? 'Assigned Zone Scope' : 'Work Scope'}</h5><div class="text-muted small">${isCityHead ? 'All data on this dashboard is filtered to your zones.' : 'Your field work is filtered to your account.'}</div></div></div>
+            ${isCityHead ? renderSimpleTable(
+              ['Zone', 'City Head', 'Route Plan', 'Status'],
+              zones.map(zone => [zone.name, zone.cityHeadName || state.user.fullName, zone.routePlan || '-', renderStatusBadge(zone.status)]),
+              'No zones have been assigned yet'
+            ) : renderSimpleTable(
+              ['Area', 'Role', 'Status'],
+              [[state.user.zone || 'Not assigned', titleCase(state.user.role.replace('_', ' ')), renderStatusBadge(state.user.status || 'active')]],
+              'No work scope available'
+            )}
+          </div>`}
         </div>
 
         <div class="section-grid two-col">
@@ -644,32 +741,46 @@
         </div>
 
         <div class="section-grid two-col">
-          <div class="content-card">
+          ${isAdmin ? `<div class="content-card">
+            <div class="card-title-row"><div><h5>AI Validation - Main Admin Feature</h5><div class="text-muted small">Sensor accuracy verification, AI comparison, discrepancies, and calibration review</div></div></div>
+            ${renderSimpleTable(
+              ['Capability', 'Admin Use'],
+              [
+                ['Sensor accuracy verification', 'Compare ultrasonic readings with uploaded bin images'],
+                ['Sensor vs AI comparison', 'Track match, mismatch, confidence, and fill level'],
+                ['Discrepancy reports', 'Review mismatches before calibration decisions'],
+                ['Calibration status', 'Use validation history to tune thresholds']
+              ],
+              'AI validation tools are ready'
+            )}
+          </div>` : ''}
+          ${isAdmin ? `<div class="content-card">
             <div class="card-title-row"><div><h5>Recent Validations</h5><div class="text-muted small">AI versus sensor comparison history</div></div></div>
             ${renderSimpleTable(
               ['Bin', 'AI', 'Sensor', 'Result'],
               (data.recentValidations || []).map(item => [item.binCode || '-', item.aiLevel, item.sensorLevel, renderStatusBadge(item.match)]),
               'No validation records yet'
             )}
-          </div>
+          </div>` : ''}
           <div class="content-card">
             <div class="card-title-row"><div><h5>Quick Actions</h5><div class="text-muted small">Jump back into the most common workflows</div></div></div>
             <div class="quick-action-grid">
-              <button class="btn btn-success btn-lg" data-route-jump="${state.user.role === 'admin' ? 'users' : 'bins'}">Manage ${state.user.role === 'admin' ? 'Users' : 'Bins'}</button>
-              <button class="btn btn-outline-success btn-lg" data-route-jump="tasks">Open Tasks</button>
-              <button class="btn btn-outline-secondary btn-lg" data-route-jump="alerts">Review Alerts</button>
-              <button class="btn btn-outline-danger btn-lg" data-route-jump="validations">AI Validation</button>
-              ${state.user.role === 'staff' ? '' : '<button class="btn btn-outline-dark btn-lg" data-route-jump="reports">Open Reports</button>'}
+              ${quickActions.map(([route, label, cls]) => `<button class="btn ${cls} btn-lg" data-route-jump="${route}">${escapeHtml(label)}</button>`).join('')}
             </div>
             <div class="mt-4">
               ${renderSimpleTable(
                 ['Report', 'Covers', 'Use'],
-                [
-                  ['Users', 'Accounts, roles, and city assignments', 'Audit staff and admin records'],
-                  ['Bins', 'Locations, status, and assignments', 'Track infrastructure health'],
-                  ['Tasks', 'Assignments, priorities, and due dates', 'Review work execution'],
-                  ['Validation Runs', 'AI vs sensor results and reviews', 'Monitor validation quality']
-                ],
+                isAdmin
+                  ? [
+                    ['All Reports', 'Users, bins, zones, tasks, and validation runs', 'System-wide audit and exports'],
+                    ['Discrepancy Reports', 'Sensor versus AI mismatches', 'Validation and calibration review'],
+                    ['System Monitoring', 'Health, counts, and sensor state', 'Operational oversight']
+                  ]
+                  : [
+                    ['Zone Reports', 'Assigned zones, bins, staff, and tasks', 'Zone-specific reporting only'],
+                    ['Operational Reports', 'Collection progress and alerts', 'Daily city operations'],
+                    ['Staff Performance', 'Tasks completed by assigned staff', 'Team management']
+                  ],
                 'No report categories available'
               )}
             </div>
@@ -679,13 +790,20 @@
     `;
   }
 
-  function renderUsersPage(users) {
-    const roleOptions = optionTags(state.lookups?.roles || ['city_head', 'staff'], null, value => titleCase(value.replace('_', ' ')));
+  function renderUsersPage(users, options = {}) {
+    const roleList = options.forcedRole ? [options.forcedRole] : (state.lookups?.roles || ['city_head', 'staff']);
+    const roleOptions = optionTags(roleList, options.forcedRole || null, value => titleCase(value.replace('_', ' ')));
     const statusOptions = optionTags(state.lookups?.userStatusOptions || ['active', 'inactive'], 'active', value => titleCase(value));
+    const title = options.title || 'User Management';
+    const subtitle = options.forcedRole === 'staff'
+      ? 'Create, edit, and secure staff accounts used for field operations.'
+      : options.forcedRole === 'city_head'
+        ? 'Create, edit, and assign City Heads to operational zones.'
+        : 'The admin can create city heads and staff with proper stored credentials.';
 
     return `
       <div class="section-grid">
-        ${renderPageHero('User Management', 'The admin can now create city heads and staff with proper stored credentials.')}
+        ${renderPageHero(title, subtitle)}
         ${renderMetricCards([
           { label: 'Total Users', value: users.length, subtext: 'Stored in SQLite' },
           { label: 'Admins', value: users.filter(user => user.role === 'admin').length, subtext: 'System admins' },
@@ -706,6 +824,7 @@
             <div class="col-md-6"><label class="form-label">Phone</label><input name="phone" class="form-control" /></div>
             <div class="col-md-6"><label class="form-label">City</label><input name="city" class="form-control" /></div>
             <div class="col-md-6"><label class="form-label">Zone</label><input name="zone" class="form-control" /></div>
+            <div class="col-md-6"><label class="form-label">Assigned Zones</label><input name="assignedZones" class="form-control" placeholder="Comma-separated zones for City Head" /></div>
             <div class="col-md-6"><label class="form-label">Status</label><select name="status" class="form-select">${statusOptions}</select></div>
             <div class="col-md-6"><label class="form-label">Meta</label><input name="meta" class="form-control" /></div>
             <div class="col-md-6"><label class="form-label">Employee ID</label><input name="employeeId" class="form-control" /></div>
@@ -724,14 +843,14 @@
         <div class="content-card">
           <div class="card-title-row"><div><h5>Users</h5><div class="text-muted small">Stored in SQLite, no hardcoded credentials</div></div></div>
           ${renderEntityTable(
-            ['ID', 'Name', 'Username', 'Role', 'Status', 'Zone', 'Actions'],
+            ['ID', 'Name', 'Username', 'Role', 'Status', 'Zone Scope', 'Actions'],
             users.map(user => [
               user.id,
               user.fullName,
               user.username,
               renderStatusBadge(titleCase(user.role.replace('_', ' '))),
               renderStatusBadge(user.status),
-              user.zone || '-',
+              (user.assignedZones || []).length ? user.assignedZones.join(', ') : (user.zone || '-'),
               actionButtons('user', user.id)
             ]),
             'No users in the database yet',
@@ -743,11 +862,12 @@
     `;
   }
 
-  function renderBinsPage(bins) {
+  function renderBinsPage(bins, options = {}) {
     const userOptions = optionTags((state.lookups?.users || []).filter(user => user.role !== 'admin'), null, user => `${user.fullName} (${user.role})`);
     const statusOptions = optionTags(state.lookups?.binStatusOptions || [], 'active', value => titleCase(value));
 
-    const form = state.user.role === 'staff' ? '' : `
+    const canEditBins = state.user.role === 'admin' && !options.readOnly;
+    const form = canEditBins ? `
       <div class="content-card">
         <div class="card-title-row"><div><h5>Create / Edit Bin</h5><div class="text-muted small">Manage bin master data in SQLite</div></div></div>
         <form id="bin-form" class="row g-3">
@@ -771,11 +891,11 @@
             <button type="submit" class="btn btn-success">Save Bin</button>
           </div>
         </form>
-      </div>`;
+      </div>` : '';
 
     return `
       <div class="section-grid">
-        ${renderPageHero(state.user.role === 'staff' ? 'Assigned Bins' : 'Bin Management', 'Keep the cleaner card-based layout while editing live records.')}
+        ${renderPageHero(options.title || (state.user.role === 'staff' ? 'Assigned Bins' : 'Smart Bin Management'), state.user.role === 'city_head' ? 'Only bins from assigned zones are visible.' : 'Keep the cleaner card-based layout while editing live records.')}
         ${renderMetricCards([
           { label: 'Total Bins', value: bins.length, subtext: 'Visible in this account' },
           { label: 'Active', value: bins.filter(bin => bin.status === 'active').length, subtext: 'Operational bins' },
@@ -783,21 +903,23 @@
           { label: 'Assigned', value: bins.filter(bin => !!bin.assignedUserId).length, subtext: 'Allocated to staff or city head' }
         ])}
         ${renderInlineFeedback('bin-feedback')}
-        <div class="section-grid ${state.user.role === 'staff' ? '' : 'two-col'}">
+        <div class="section-grid ${canEditBins ? 'two-col' : ''}">
         ${form}
         <div class="content-card">
-          <div class="card-title-row"><div><h5>${state.user.role === 'staff' ? 'My Bins' : 'Bins'}</h5><div class="text-muted small">Live bin list from SQLite</div></div></div>
+          <div class="card-title-row"><div><h5>${state.user.role === 'staff' ? 'My Bins' : 'Bins'}</h5><div class="text-muted small">${state.user.role === 'city_head' ? 'Filtered on the backend to assigned zones' : 'Live bin list from SQLite'}</div></div></div>
           ${renderEntityTable(
-            ['Code', 'Location', 'Height', 'Width', 'Thresholds', 'Status', 'Assigned', 'Actions'],
+            ['Code', 'Location', 'Zone', 'Level', 'Height', 'Width', 'Thresholds', 'Status', 'Assigned', 'Actions'],
             bins.map(bin => [
               bin.binCode,
               bin.location,
+              bin.zone || '-',
+              renderStatusBadge(bin.level),
               `${bin.binHeightCm || '-'} cm`,
               `${bin.binWidthCm || '-'} cm`,
               `low ${bin.lowThresholdCm ?? '-'} / medium ${bin.mediumThresholdCm ?? '-'}`,
               renderStatusBadge(bin.status),
               bin.assignedUserName || '-',
-              state.user.role === 'staff' ? '-' : actionButtons('bin', bin.id)
+              canEditBins ? actionButtons('bin', bin.id) : '-'
             ]),
             'No bins in the database yet',
             { datatable: true, tableId: 'bins-table', searchPlaceholder: 'Search bins' }
@@ -808,11 +930,16 @@
     `;
   }
 
-  function renderTasksPage(tasks) {
-    const userOptions = optionTags((state.lookups?.users || []).filter(user => user.role !== 'admin'), null, user => `${user.fullName} (${user.role})`);
+  function renderTasksPage(tasks, options = {}) {
+    const staffUsers = state.lookups?.staffUsers || (state.lookups?.users || []).filter(user => user.role === 'staff');
+    const userOptions = optionTags(staffUsers, null, user => `${user.fullName} (${user.zone || 'No zone'})`);
     const binOptions = optionTags(state.lookups?.bins || [], null, bin => `${bin.binCode} - ${bin.location}`);
+    const zoneOptions = optionTags(state.lookups?.zoneNames || [], null, value => value);
     const priorityOptions = optionTags(state.lookups?.taskPriorityOptions || [], 'medium', value => titleCase(value));
     const statusOptions = optionTags(state.lookups?.taskStatusOptions || [], 'pending', value => titleCase(value.replace('_', ' ')));
+    const zoneField = state.user.role === 'city_head'
+      ? `<select name="zone" class="form-select" required><option value="">Select assigned zone</option>${zoneOptions}</select>`
+      : '<input name="zone" class="form-control" />';
 
     const form = state.user.role === 'staff' ? '' : `
       <div class="content-card">
@@ -820,7 +947,7 @@
         <form id="task-form" class="row g-3">
           <input type="hidden" name="id" />
           <div class="col-md-6"><label class="form-label">Title</label><input name="title" class="form-control" required /></div>
-          <div class="col-md-6"><label class="form-label">Zone</label><input name="zone" class="form-control" /></div>
+          <div class="col-md-6"><label class="form-label">Zone</label>${zoneField}</div>
           <div class="col-md-6"><label class="form-label">Priority</label><select name="priority" class="form-select">${priorityOptions}</select></div>
           <div class="col-md-6"><label class="form-label">Status</label><select name="status" class="form-select">${statusOptions}</select></div>
           <div class="col-md-6"><label class="form-label">Assigned User</label><select name="assignedUserId" class="form-select"><option value="">Unassigned</option>${userOptions}</select></div>
@@ -837,7 +964,7 @@
 
     return `
       <div class="section-grid">
-        ${renderPageHero(state.user.role === 'staff' ? 'My Tasks' : 'Task Management', 'Track field work with the richer operations layout and clear action messages.')}
+        ${renderPageHero(options.title || (state.user.role === 'staff' ? 'My Tasks' : 'Task Management'), state.user.role === 'city_head' ? 'Assign tasks to staff only, scoped to your assigned zones.' : 'Track field work with the richer operations layout and clear action messages.')}
         ${renderMetricCards([
           { label: 'Total Tasks', value: tasks.length, subtext: 'Visible in this account' },
           { label: 'Pending', value: tasks.filter(task => task.status === 'pending').length, subtext: 'Waiting to start' },
@@ -850,9 +977,10 @@
         <div class="content-card">
           <div class="card-title-row"><div><h5>${state.user.role === 'staff' ? 'My Tasks' : 'Tasks'}</h5><div class="text-muted small">Task records now come from SQLite</div></div><span class="kpi-chip">${tasks.length} records</span></div>
           ${renderEntityTable(
-            ['Title', 'Assigned', 'Priority', 'Status', 'Due', 'Bin', 'Actions'],
+            ['Title', 'Zone', 'Assigned', 'Priority', 'Status', 'Due', 'Bin', 'Actions'],
             tasks.map(task => [
               task.title,
+              task.zone || '-',
               task.assignedUserName || '-',
               renderStatusBadge(task.priority),
               renderStatusBadge(task.status),
@@ -869,8 +997,11 @@
     `;
   }
 
-  function renderAlertsPage(alerts) {
-    const userOptions = optionTags((state.lookups?.users || []).filter(user => user.role !== 'admin'), null, user => `${user.fullName} (${user.role})`);
+  function renderAlertsPage(alerts, options = {}) {
+    const targetUsers = state.user.role === 'city_head'
+      ? (state.lookups?.staffUsers || [])
+      : (state.lookups?.users || []).filter(user => user.role !== 'admin');
+    const userOptions = optionTags(targetUsers, null, user => `${user.fullName} (${user.zone || user.role})`);
     const binOptions = optionTags(state.lookups?.bins || [], null, bin => `${bin.binCode} - ${bin.location}`);
     const priorityOptions = optionTags(state.lookups?.alertPriorityOptions || [], 'medium', value => titleCase(value));
     const statusOptions = optionTags(state.lookups?.alertStatusOptions || [], 'open', value => titleCase(value));
@@ -895,7 +1026,7 @@
 
     return `
       <div class="section-grid">
-        ${renderPageHero('Alerts', 'Surface operational issues quickly and keep the response workflow easy to manage.')}
+        ${renderPageHero(options.title || 'Alerts', state.user.role === 'city_head' ? 'Handle assigned-zone overflow and operational alerts without exposing admin data.' : 'Surface operational issues quickly and keep the response workflow easy to manage.')}
         ${renderMetricCards([
           { label: 'Total Alerts', value: alerts.length, subtext: 'Stored in SQLite' },
           { label: 'Open', value: alerts.filter(alert => alert.status === 'open').length, subtext: 'Require attention' },
@@ -926,25 +1057,27 @@
     `;
   }
 
-  function renderReportsPage(data) {
+  function renderReportsPage(data, options = {}) {
     const datasets = data || {};
     const users = filterGeneratedReportItems(datasets.users || [], item => item.createdAt);
     const bins = filterGeneratedReportItems(datasets.bins || [], item => item.createdAt);
     const tasks = filterGeneratedReportItems(datasets.tasks || [], item => item.createdAt);
     const validations = filterGeneratedReportItems(datasets.validations || [], item => item.createdAt || item.timestamp);
+    const zones = datasets.zones || [];
     const pageLength = hasActiveReportFilter() ? -1 : 8;
+    const isCityHeadReport = options.cityHeadMode || state.user.role === 'city_head';
 
     return `
       <div class="section-grid">
-        ${renderPageHero('Reports', 'Generate live report tables for users, bins, tasks, and validation runs with a shared date range.')}
-        <div id="reports-metrics">${renderMetricCards(buildGeneratedReportMetrics({ users, bins, tasks, validations }))}</div>
+        ${renderPageHero(options.title || (isCityHeadReport ? 'Zone Reports' : 'All Reports'), isCityHeadReport ? 'Generate assigned-zone operational reports only. Backend filtering prevents all-zone access.' : 'Generate live report tables for users, bins, tasks, and validation runs with a shared date range.')}
+        <div id="reports-metrics">${renderMetricCards(buildGeneratedReportMetrics({ users, bins, tasks, validations, zones }, isCityHeadReport))}</div>
         <div class="content-card report-filter-card">
           <div class="card-title-row mb-0">
             <div>
               <h5>Generated Reports Filter</h5>
               <div class="text-muted small">Set a start date and end date to filter every report below by creation date.</div>
             </div>
-            <span class="kpi-chip" id="reports-count-chip">${buildGeneratedReportCountChip({ users, bins, tasks, validations })}</span>
+            <span class="kpi-chip" id="reports-count-chip">${buildGeneratedReportCountChip({ users, bins, tasks, validations, zones }, isCityHeadReport)}</span>
           </div>
           <div class="report-filter-grid mt-4">
             <div>
@@ -958,9 +1091,19 @@
             <div class="report-filter-actions">
               <button type="button" id="report-filter-clear" class="btn btn-outline-secondary">Clear Filter</button>
             </div>
-            <div class="report-filter-summary text-muted small" id="reports-filter-summary">${buildGeneratedReportSummary({ users, bins, tasks, validations })}</div>
+            <div class="report-filter-summary text-muted small" id="reports-filter-summary">${buildGeneratedReportSummary({ users, bins, tasks, validations, zones }, isCityHeadReport)}</div>
           </div>
         </div>
+
+        ${isCityHeadReport ? `<div class="content-card">
+          <div class="card-title-row"><div><h5>Assigned Zones Report</h5><div class="text-muted small">Zones assigned to this City Head</div></div></div>
+          ${renderEntityTable(
+            ['Zone', 'City Head', 'Route Plan', 'Status'],
+            zones.map(zone => [zone.name, zone.cityHeadName || state.user.fullName, zone.routePlan || '-', renderStatusBadge(zone.status)]),
+            'No assigned zones found',
+            { datatable: true, tableId: 'report-zones-table', searchPlaceholder: 'Search zone report', pageLength, exportable: true, exportTitle: 'Assigned Zones Report' }
+          )}
+        </div>` : ''}
 
         <div class="section-grid two-col">
           <div class="content-card">
@@ -995,7 +1138,7 @@
             )}
           </div>
 
-          <div class="content-card">
+          ${isCityHeadReport ? '' : `<div class="content-card">
             <div class="card-title-row"><div><h5>Validation Runs Report</h5><div class="text-muted small">AI and sensor validation history</div></div></div>
             ${renderEntityTable(
               ['Bin', 'AI Level', 'Sensor Level', 'Result', 'Review', 'Created By', 'Created'],
@@ -1003,7 +1146,7 @@
               'No validation runs found for the selected date range',
               { datatable: true, tableId: 'report-validations-table', searchPlaceholder: 'Search validations report', pageLength, exportable: true, exportTitle: 'Validation Runs Report' }
             )}
-          </div>
+          </div>`}
         </div>
       </div>
     `;
@@ -1095,6 +1238,240 @@
             { datatable: true, tableId: 'validations-table', searchPlaceholder: 'Search validations' }
           )}
         </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderZonesPage(zones, options = {}) {
+    const cityHeadOptions = optionTags(state.lookups?.cityHeads || [], null, user => user.fullName);
+    const statusOptions = optionTags(state.lookups?.zoneStatusOptions || ['active', 'inactive'], 'active', value => titleCase(value));
+    const canEdit = state.user.role === 'admin' && !options.readOnly;
+    const form = canEdit ? `
+      <div class="content-card">
+        <div class="card-title-row"><div><h5>Create / Edit Zone</h5><div class="text-muted small">Assign zones to City Heads and define route setup notes</div></div></div>
+        <form id="zone-form" class="row g-3">
+          <input type="hidden" name="id" />
+          <div class="col-md-6"><label class="form-label">Zone Name</label><input name="name" class="form-control" required /></div>
+          <div class="col-md-6"><label class="form-label">City</label><input name="city" class="form-control" /></div>
+          <div class="col-md-6"><label class="form-label">City Head</label><select name="cityHeadId" class="form-select"><option value="">Unassigned</option>${cityHeadOptions}</select></div>
+          <div class="col-md-6"><label class="form-label">Status</label><select name="status" class="form-select">${statusOptions}</select></div>
+          <div class="col-12"><label class="form-label">Route Plan</label><textarea name="routePlan" class="form-control" rows="3" placeholder="Route setup, shift path, vehicle notes"></textarea></div>
+          <div class="col-12"><label class="form-label">Notes</label><textarea name="notes" class="form-control" rows="2"></textarea></div>
+          <div class="col-12 d-flex gap-2 justify-content-end">
+            <button type="button" id="zone-form-reset" class="btn btn-outline-secondary">Clear</button>
+            <button type="submit" class="btn btn-success">Save Zone</button>
+          </div>
+        </form>
+      </div>` : '';
+
+    return `
+      <div class="section-grid">
+        ${renderPageHero(options.title || 'Zone & Route Setup', state.user.role === 'city_head' ? 'Only assigned zones and route plans are visible.' : 'Create zones, assign City Heads, and maintain route setup details.')}
+        ${renderMetricCards([
+          { label: 'Zones', value: zones.length, subtext: 'Visible zone records' },
+          { label: 'Active', value: zones.filter(zone => zone.status === 'active').length, subtext: 'Operational zones' },
+          { label: 'Assigned', value: zones.filter(zone => !!zone.cityHeadId).length, subtext: 'Owned by City Heads' },
+          { label: 'Routes', value: zones.filter(zone => !!zone.routePlan).length, subtext: 'With route setup' }
+        ])}
+        ${renderInlineFeedback('zone-feedback')}
+        <div class="section-grid ${canEdit ? 'two-col' : ''}">
+          ${form}
+          <div class="content-card">
+            <div class="card-title-row"><div><h5>Zones</h5><div class="text-muted small">${state.user.role === 'city_head' ? 'Backend-filtered assigned zones' : 'Live zone records'}</div></div><span class="kpi-chip">${zones.length} records</span></div>
+            ${renderEntityTable(
+              ['Zone', 'City', 'City Head', 'Status', 'Route Plan', 'Actions'],
+              zones.map(zone => [
+                zone.name,
+                zone.city || '-',
+                zone.cityHeadName || 'Unassigned',
+                renderStatusBadge(zone.status),
+                zone.routePlan || '-',
+                canEdit ? actionButtons('zone', zone.id) : '-'
+              ]),
+              'No zones have been created yet',
+              { datatable: true, tableId: 'zones-table', searchPlaceholder: 'Search zones' }
+            )}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderCollectionProgressPage(tasks) {
+    const completed = tasks.filter(task => task.status === 'completed').length;
+    const open = tasks.filter(task => task.status !== 'completed').length;
+    const highPriority = tasks.filter(task => task.priority === 'high' && task.status !== 'completed').length;
+    const progress = tasks.length ? Math.round((completed / tasks.length) * 100) : 0;
+    return `
+      <div class="section-grid">
+        ${renderPageHero('Collection Progress', 'Track assigned-zone collection status and active field work.')}
+        ${renderMetricCards([
+          { label: 'Progress', value: `${progress}%`, subtext: 'Completed zone tasks' },
+          { label: 'Completed', value: completed, subtext: 'Finished collections' },
+          { label: 'Open', value: open, subtext: 'Pending or in progress' },
+          { label: 'High Priority', value: highPriority, subtext: 'Needs attention' }
+        ])}
+        <div class="content-card">
+          <div class="card-title-row"><div><h5>Collection Work</h5><div class="text-muted small">Only assigned-zone tasks are returned by the backend</div></div></div>
+          ${renderEntityTable(
+            ['Title', 'Zone', 'Assigned', 'Priority', 'Status', 'Due', 'Bin'],
+            tasks.map(task => [task.title, task.zone || '-', task.assignedUserName || '-', renderStatusBadge(task.priority), renderStatusBadge(task.status), task.dueAt || '-', task.binCode || '-']),
+            'No collection tasks found',
+            { datatable: true, tableId: 'collection-progress-table', searchPlaceholder: 'Search collection progress' }
+          )}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderDiscrepancyReportsPage(validations) {
+    const discrepancies = validations.filter(item => item.match === 'Mismatch');
+    return `
+      <div class="section-grid">
+        ${renderPageHero('Sensor vs AI Discrepancy Reports', 'Admin-only review of mismatches between sensor readings and AI image predictions.')}
+        ${renderMetricCards([
+          { label: 'Validation Runs', value: validations.length, subtext: 'All saved runs' },
+          { label: 'Discrepancies', value: discrepancies.length, subtext: 'Sensor/AI mismatches' },
+          { label: 'Pending Review', value: discrepancies.filter(item => item.reviewStatus === 'new').length, subtext: 'Need validation' },
+          { label: 'Resolved', value: discrepancies.filter(item => item.reviewStatus === 'resolved').length, subtext: 'Closed items' }
+        ])}
+        <div class="content-card">
+          <div class="card-title-row"><div><h5>Discrepancies</h5><div class="text-muted small">Use this list for validation reports and calibration decisions</div></div></div>
+          ${renderEntityTable(
+            ['Bin', 'Location', 'AI Level', 'Sensor Level', 'Difference', 'Review', 'Created'],
+            discrepancies.map(item => [item.binCode || '-', item.location || '-', item.aiLevel || '-', item.sensorLevel || '-', renderStatusBadge(item.match), renderStatusBadge(item.reviewStatus), formatDateTime(item.createdAt)]),
+            'No discrepancies found',
+            { datatable: true, tableId: 'discrepancy-table', searchPlaceholder: 'Search discrepancies', exportable: true, exportTitle: 'Sensor vs AI Discrepancies' }
+          )}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderSystemMonitoringPage(data) {
+    const counts = data.counts || {};
+    return `
+      <div class="section-grid">
+        ${renderPageHero('System Monitoring', 'Admin view of global system health, data counts, model availability, and sensor status.')}
+        ${renderMetricCards([
+          { label: 'Status', value: titleCase(data.status || 'unknown'), subtext: 'Application health' },
+          { label: 'Users', value: counts.users || 0, subtext: 'All accounts' },
+          { label: 'Smart Bins', value: counts.bins || 0, subtext: 'All bins' },
+          { label: 'Discrepancies', value: counts.discrepancies || 0, subtext: 'AI mismatch records' }
+        ])}
+        <div class="section-grid two-col">
+          <div class="content-card">
+            <div class="card-title-row"><div><h5>System Health</h5><div class="text-muted small">Backend-controlled details</div></div></div>
+            ${renderSimpleTable(
+              ['Item', 'Value'],
+              [
+                ['Database', data.databasePath || '-'],
+                ['AI Model', data.modelPath || '-'],
+                ['Model Available', data.modelExists ? renderStatusBadge('active') : renderStatusBadge('missing')],
+                ['Sensor Source', data.sensor?.source || '-'],
+                ['Sensor Status', data.sensor?.status || '-']
+              ],
+              'No health details available'
+            )}
+          </div>
+          <div class="content-card">
+            <div class="card-title-row"><div><h5>Global Counts</h5><div class="text-muted small">Admin sees all data</div></div></div>
+            ${renderSimpleTable(
+              ['Dataset', 'Count'],
+              Object.entries(counts).map(([key, value]) => [titleCase(key.replace(/([A-Z])/g, ' $1')), value]),
+              'No counts available'
+            )}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderBackupRestorePage(data) {
+    const backups = data.backups || [];
+    const backupOptions = optionTags(backups, null, item => `${item.name} (${Math.round((item.sizeBytes || 0) / 1024)} KB)`, item => item.name);
+    return `
+      <div class="section-grid">
+        ${renderPageHero('Backup & Restore', 'Admin-only SQLite backup creation and restore access.')}
+        ${renderInlineFeedback('backup-feedback')}
+        <div class="section-grid two-col">
+          <div class="content-card">
+            <div class="card-title-row"><div><h5>Create Backup</h5><div class="text-muted small">Creates a timestamped copy of the current SQLite database</div></div></div>
+            <button type="button" id="create-backup-btn" class="btn btn-success btn-lg">Create Backup</button>
+          </div>
+          <div class="content-card">
+            <div class="card-title-row"><div><h5>Restore Backup</h5><div class="text-muted small">Restores from a saved backup after preserving the current database</div></div></div>
+            <form id="restore-form" class="row g-3">
+              <div class="col-12"><label class="form-label">Backup File</label><select name="backupName" class="form-select"><option value="">Select backup</option>${backupOptions}</select></div>
+              <div class="col-12 d-flex justify-content-end"><button type="submit" class="btn btn-outline-danger">Restore Selected Backup</button></div>
+            </form>
+          </div>
+        </div>
+        <div class="content-card">
+          <div class="card-title-row"><div><h5>Available Backups</h5><div class="text-muted small">Files stored in the project backup folder</div></div><span class="kpi-chip">${backups.length} files</span></div>
+          ${renderEntityTable(
+            ['File', 'Size', 'Updated'],
+            backups.map(item => [item.name, `${Math.round((item.sizeBytes || 0) / 1024)} KB`, formatDateTime(item.updatedAt)]),
+            'No backups have been created yet',
+            { datatable: true, tableId: 'backup-table', searchPlaceholder: 'Search backups' }
+          )}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderStaffPerformancePage(data) {
+    const tasks = data.tasks || [];
+    const staff = data.users || [];
+    const performance = staff.filter(user => user.role === 'staff').map(user => {
+      const userTasks = tasks.filter(task => String(task.assignedUserId || '') === String(user.id));
+      const completed = userTasks.filter(task => task.status === 'completed').length;
+      const rate = userTasks.length ? Math.round((completed / userTasks.length) * 100) : 0;
+      return [user.fullName, user.zone || '-', userTasks.length, completed, `${rate}%`];
+    });
+    return `
+      <div class="section-grid">
+        ${renderPageHero('Staff Performance', 'Monitor assigned-zone staff performance from task completion data.')}
+        ${renderMetricCards([
+          { label: 'Staff', value: performance.length, subtext: 'In assigned zones' },
+          { label: 'Tasks', value: tasks.length, subtext: 'Zone-scoped tasks' },
+          { label: 'Completed', value: tasks.filter(task => task.status === 'completed').length, subtext: 'Finished work' },
+          { label: 'Open', value: tasks.filter(task => task.status !== 'completed').length, subtext: 'Remaining work' }
+        ])}
+        <div class="content-card">
+          ${renderEntityTable(['Staff', 'Zone', 'Tasks', 'Completed', 'Completion Rate'], performance, 'No staff performance data found', { datatable: true, tableId: 'staff-performance-table', searchPlaceholder: 'Search staff performance' })}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderShiftRouteSchedulePage(data) {
+    const zones = data.zones || [];
+    const tasks = data.tasks || [];
+    return `
+      <div class="section-grid">
+        ${renderPageHero('Shift & Route Schedule', 'Review assigned-zone route plans and scheduled task due dates.')}
+        <div class="section-grid two-col">
+          <div class="content-card">
+            <div class="card-title-row"><div><h5>Route Plans</h5><div class="text-muted small">Configured by Admin for assigned zones</div></div></div>
+            ${renderEntityTable(['Zone', 'Route Plan', 'Status'], zones.map(zone => [zone.name, zone.routePlan || '-', renderStatusBadge(zone.status)]), 'No route plans found', { datatable: true, tableId: 'route-plan-table', searchPlaceholder: 'Search routes' })}
+          </div>
+          <div class="content-card">
+            <div class="card-title-row"><div><h5>Scheduled Tasks</h5><div class="text-muted small">Upcoming work by due date</div></div></div>
+            ${renderEntityTable(['Task', 'Zone', 'Assigned', 'Due', 'Status'], tasks.map(task => [task.title, task.zone || '-', task.assignedUserName || '-', task.dueAt || '-', renderStatusBadge(task.status)]), 'No scheduled tasks found', { datatable: true, tableId: 'schedule-table', searchPlaceholder: 'Search schedule' })}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderAccessDeniedPage() {
+    return `
+      <div class="content-card">
+        <div class="alert alert-danger mb-0">
+          <strong>Access Denied</strong><br>
+          You do not have permission to access this page.
         </div>
       </div>
     `;
@@ -1279,7 +1656,15 @@
     return Object.keys(summary).length ? summary : { None: 0 };
   }
 
-  function buildGeneratedReportMetrics(datasets) {
+  function buildGeneratedReportMetrics(datasets, cityHeadMode = false) {
+    if (cityHeadMode) {
+      return [
+        { label: 'Assigned Zones', value: (datasets.zones || []).length, subtext: 'Zone-specific scope' },
+        { label: 'Zone Bins', value: datasets.bins.length, subtext: 'Assigned-zone bins' },
+        { label: 'Staff/Users', value: datasets.users.length, subtext: 'Scoped accounts' },
+        { label: 'Operations Tasks', value: datasets.tasks.length, subtext: 'Assigned-zone tasks' }
+      ];
+    }
     return [
       { label: 'Users', value: datasets.users.length, subtext: 'Filtered user records' },
       { label: 'Bins', value: datasets.bins.length, subtext: 'Filtered bin records' },
@@ -1288,14 +1673,16 @@
     ];
   }
 
-  function buildGeneratedReportCountChip(datasets) {
-    const total = datasets.users.length + datasets.bins.length + datasets.tasks.length + datasets.validations.length;
+  function buildGeneratedReportCountChip(datasets, cityHeadMode = false) {
+    const total = datasets.users.length + datasets.bins.length + datasets.tasks.length + (cityHeadMode ? (datasets.zones || []).length : datasets.validations.length);
     return `${total} filtered rows`;
   }
 
-  function buildGeneratedReportSummary(datasets) {
+  function buildGeneratedReportSummary(datasets, cityHeadMode = false) {
     const range = normalizedDateRange(state.reportDateFilter.from, state.reportDateFilter.to);
-    const summary = `${datasets.users.length} users, ${datasets.bins.length} bins, ${datasets.tasks.length} tasks, and ${datasets.validations.length} validation runs`;
+    const summary = cityHeadMode
+      ? `${(datasets.zones || []).length} assigned zones, ${datasets.users.length} scoped users, ${datasets.bins.length} bins, and ${datasets.tasks.length} tasks`
+      : `${datasets.users.length} users, ${datasets.bins.length} bins, ${datasets.tasks.length} tasks, and ${datasets.validations.length} validation runs`;
 
     if (!range.from && !range.to) {
       return `Showing all available rows: ${summary}. Apply a date range to narrow every report table and export the result.`;
@@ -1356,9 +1743,9 @@
     });
   }
 
-  function optionTags(items, selectedValue, labelGetter) {
+  function optionTags(items, selectedValue, labelGetter, valueGetter = null) {
     return items.map(item => {
-      const value = typeof item === 'string' ? item : item.id;
+      const value = valueGetter ? valueGetter(item) : (typeof item === 'string' ? item : item.id);
       const label = typeof item === 'string' ? (labelGetter ? labelGetter(item) : item) : (labelGetter ? labelGetter(item) : item.fullName || item.binCode);
       const selected = String(value) === String(selectedValue || '') ? 'selected' : '';
       return `<option value="${escapeHtml(value)}" ${selected}>${escapeHtml(label)}</option>`;
@@ -1412,11 +1799,26 @@
     switch (route) {
       case 'dashboard': mountDashboard(data); break;
       case 'users': mountUsersPage(data); break;
+      case 'staff_management': mountUsersPage(data); break;
+      case 'city_head_management': mountUsersPage(data); break;
       case 'bins': mountBinsPage(data); break;
+      case 'bin_fill_levels': break;
+      case 'zones': mountZonesPage(data); break;
+      case 'assigned_zones': break;
       case 'tasks': mountTasksPage(data); break;
+      case 'collection_progress': break;
+      case 'staff_task_assignment': mountTasksPage(data); break;
       case 'alerts': mountAlertsPage(data); break;
+      case 'overflow_emergency': mountAlertsPage(data); break;
       case 'reports': mountReportsPage(data); break;
+      case 'zone_reports': mountReportsPage(data); break;
+      case 'operational_reports': mountReportsPage(data); break;
       case 'validations': await mountValidationsPage(data); break;
+      case 'discrepancy_reports': break;
+      case 'system_monitoring': break;
+      case 'backup_restore': mountBackupRestorePage(); break;
+      case 'staff_performance': break;
+      case 'shift_route_schedule': break;
       case 'profile': mountProfilePage(); break;
       default: break;
     }
@@ -1502,6 +1904,38 @@
     mountPageEnhancements(state.route, state.pageData, dataTables);
   }
 
+  async function mountZonesPage(zones) {
+    bindFormSubmit('zone-form', async event => {
+      event.preventDefault();
+      clearInlineFeedback('zone-feedback');
+      const payload = Object.fromEntries(new FormData(event.target).entries());
+      const id = payload.id;
+      delete payload.id;
+      try {
+        await api(id ? `/api/zones/${id}` : '/api/zones', { method: id ? 'PUT' : 'POST', body: payload });
+        await reloadCurrentPage();
+        showActionSuccess('zone-feedback', `Zone ${id ? 'updated' : 'created'} successfully.`);
+      } catch (error) {
+        showActionError('zone-feedback', error, 'Unable to save the zone.');
+      }
+    });
+    bindResetButton('zone-form-reset', 'zone-form', 'zone-feedback');
+    zones.forEach(zone => {
+      document.querySelector(`[data-action="edit-zone"][data-id="${zone.id}"]`)?.addEventListener('click', () => startEdit('zone-form', 'zone-feedback', zone, zone.name));
+      document.querySelector(`[data-action="delete-zone"][data-id="${zone.id}"]`)?.addEventListener('click', async () => {
+        if (!window.confirm(`Delete zone "${zone.name}"? Existing bin/task zone text will remain, but this assignment record will be removed.`)) return;
+        clearInlineFeedback('zone-feedback');
+        try {
+          await api(`/api/zones/${zone.id}`, { method: 'DELETE' });
+          await reloadCurrentPage();
+          showActionSuccess('zone-feedback', 'Zone deleted successfully.');
+        } catch (error) {
+          showActionError('zone-feedback', error, 'Unable to delete the zone.');
+        }
+      });
+    });
+  }
+
   async function mountUsersPage(users) {
     bindFormSubmit('user-form', async event => {
       event.preventDefault();
@@ -1511,7 +1945,7 @@
       delete payload.id;
       try {
         await api(id ? `/api/users/${id}` : '/api/users', { method: id ? 'PUT' : 'POST', body: payload });
-        await reloadCurrentPage('users');
+        await reloadCurrentPage();
         showActionSuccess('user-feedback', `User ${id ? 'updated' : 'created'} successfully.`);
       } catch (error) {
         showActionError('user-feedback', error, 'Unable to save the user.');
@@ -1525,7 +1959,7 @@
         clearInlineFeedback('user-feedback');
         try {
           await api(`/api/users/${user.id}`, { method: 'DELETE' });
-          await reloadCurrentPage('users');
+          await reloadCurrentPage();
           showActionSuccess('user-feedback', 'User deleted successfully.');
         } catch (error) {
           showActionError('user-feedback', error, 'Unable to delete the user.');
@@ -1534,8 +1968,40 @@
     });
   }
 
+  async function mountBackupRestorePage() {
+    document.getElementById('create-backup-btn')?.addEventListener('click', async () => {
+      clearInlineFeedback('backup-feedback');
+      try {
+        await api('/api/backup', { method: 'POST' });
+        await reloadCurrentPage();
+        showActionSuccess('backup-feedback', 'Backup created successfully.');
+      } catch (error) {
+        showActionError('backup-feedback', error, 'Unable to create backup.');
+      }
+    });
+
+    bindFormSubmit('restore-form', async event => {
+      event.preventDefault();
+      clearInlineFeedback('backup-feedback');
+      const payload = Object.fromEntries(new FormData(event.target).entries());
+      if (!payload.backupName) {
+        showActionError('backup-feedback', new Error('Select a backup before restoring.'), 'Select a backup before restoring.');
+        return;
+      }
+      if (!window.confirm(`Restore backup "${payload.backupName}"? The current database will be backed up first.`)) return;
+      try {
+        await api('/api/restore', { method: 'POST', body: payload });
+        await refreshLookups();
+        await reloadCurrentPage();
+        showActionSuccess('backup-feedback', 'Backup restored successfully.');
+      } catch (error) {
+        showActionError('backup-feedback', error, 'Unable to restore backup.');
+      }
+    });
+  }
+
   async function mountBinsPage(bins) {
-    if (state.user.role !== 'staff') {
+    if (state.user.role === 'admin') {
       bindFormSubmit('bin-form', async event => {
         event.preventDefault();
         clearInlineFeedback('bin-feedback');
@@ -1544,7 +2010,7 @@
         delete payload.id;
         try {
           await api(id ? `/api/bins/${id}` : '/api/bins', { method: id ? 'PUT' : 'POST', body: payload });
-          await reloadCurrentPage('bins');
+          await reloadCurrentPage();
           showActionSuccess('bin-feedback', `Bin ${id ? 'updated' : 'created'} successfully.`);
         } catch (error) {
           showActionError('bin-feedback', error, 'Unable to save the bin.');
@@ -1558,7 +2024,7 @@
           clearInlineFeedback('bin-feedback');
           try {
             await api(`/api/bins/${bin.id}`, { method: 'DELETE' });
-            await reloadCurrentPage('bins');
+            await reloadCurrentPage();
             showActionSuccess('bin-feedback', 'Bin deleted successfully.');
           } catch (error) {
             showActionError('bin-feedback', error, 'Unable to delete the bin.');
@@ -1576,7 +2042,7 @@
           const status = document.querySelector(`[data-action="staff-task-status"][data-id="${task.id}"]`)?.value || task.status;
           try {
             await api(`/api/tasks/${task.id}`, { method: 'PUT', body: { status } });
-            await reloadCurrentPage('tasks');
+            await reloadCurrentPage();
             showActionSuccess('task-feedback', `Task "${task.title}" updated successfully.`);
           } catch (error) {
             showActionError('task-feedback', error, 'Unable to update the task.');
@@ -1594,7 +2060,7 @@
       delete payload.id;
       try {
         await api(id ? `/api/tasks/${id}` : '/api/tasks', { method: id ? 'PUT' : 'POST', body: payload });
-        await reloadCurrentPage('tasks');
+        await reloadCurrentPage();
         showActionSuccess('task-feedback', `Task ${id ? 'updated' : 'created'} successfully.`);
       } catch (error) {
         showActionError('task-feedback', error, 'Unable to save the task.');
@@ -1608,7 +2074,7 @@
         clearInlineFeedback('task-feedback');
         try {
           await api(`/api/tasks/${task.id}`, { method: 'DELETE' });
-          await reloadCurrentPage('tasks');
+          await reloadCurrentPage();
           showActionSuccess('task-feedback', 'Task deleted successfully.');
         } catch (error) {
           showActionError('task-feedback', error, 'Unable to delete the task.');
@@ -1625,7 +2091,7 @@
           const status = document.querySelector(`[data-action="staff-alert-status"][data-id="${alert.id}"]`)?.value || alert.status;
           try {
             await api(`/api/alerts/${alert.id}`, { method: 'PUT', body: { status } });
-            await reloadCurrentPage('alerts');
+            await reloadCurrentPage();
             showActionSuccess('alert-feedback', `Alert "${alert.title}" updated successfully.`);
           } catch (error) {
             showActionError('alert-feedback', error, 'Unable to update the alert.');
@@ -1643,7 +2109,7 @@
       delete payload.id;
       try {
         await api(id ? `/api/alerts/${id}` : '/api/alerts', { method: id ? 'PUT' : 'POST', body: payload });
-        await reloadCurrentPage('alerts');
+        await reloadCurrentPage();
         showActionSuccess('alert-feedback', `Alert ${id ? 'updated' : 'created'} successfully.`);
       } catch (error) {
         showActionError('alert-feedback', error, 'Unable to save the alert.');
@@ -1657,7 +2123,7 @@
         clearInlineFeedback('alert-feedback');
         try {
           await api(`/api/alerts/${alert.id}`, { method: 'DELETE' });
-          await reloadCurrentPage('alerts');
+          await reloadCurrentPage();
           showActionSuccess('alert-feedback', 'Alert deleted successfully.');
         } catch (error) {
           showActionError('alert-feedback', error, 'Unable to delete the alert.');
@@ -1676,7 +2142,7 @@
         from: fromInput?.value || '',
         to: toInput?.value || ''
       };
-      await reloadCurrentPage('reports');
+      await reloadCurrentPage();
     };
 
     fromInput?.addEventListener('change', applyFilter);
@@ -1686,7 +2152,7 @@
       state.reportDateFilter = { from: '', to: '' };
       if (fromInput) fromInput.value = '';
       if (toInput) toInput.value = '';
-      await reloadCurrentPage('reports');
+      await reloadCurrentPage();
     });
   }
 
@@ -1719,7 +2185,7 @@
       try {
         const result = await api('/api/validate', { method: 'POST', body: formData });
         state.validationResult = result;
-        await reloadCurrentPage('validations');
+        await reloadCurrentPage();
         showActionSuccess('validation-feedback', 'Validation saved successfully.');
       } catch (error) {
         showActionError('validation-feedback', error, 'Unable to run the validation.');
@@ -1735,7 +2201,7 @@
         const reviewNotes = document.querySelector(`[data-action="validation-notes"][data-id="${item.id}"]`)?.value || '';
         try {
           await api(`/api/validations/${item.id}`, { method: 'PUT', body: { reviewStatus, reviewNotes } });
-          await reloadCurrentPage('validations');
+          await reloadCurrentPage();
           showActionSuccess('validation-feedback', 'Validation review updated successfully.');
         } catch (error) {
           showActionError('validation-feedback', error, 'Unable to update the validation review.');
@@ -1746,7 +2212,7 @@
         clearInlineFeedback('validation-feedback');
         try {
           await api(`/api/validations/${item.id}`, { method: 'DELETE' });
-          await reloadCurrentPage('validations');
+          await reloadCurrentPage();
           showActionSuccess('validation-feedback', 'Validation deleted successfully.');
         } catch (error) {
           showActionError('validation-feedback', error, 'Unable to delete the validation record.');

@@ -1,14 +1,22 @@
 import json
 import os
 import re
+import shutil
 import threading
 import time
 from datetime import datetime
 from functools import wraps
 
 import numpy as np
-import serial
-import tensorflow as tf
+try:
+    import serial
+except ImportError:  # pragma: no cover
+    serial = None
+
+try:
+    import tensorflow as tf
+except ImportError:  # pragma: no cover
+    tf = None
 from flask import Flask, jsonify, render_template, request, send_from_directory, session, g
 from PIL import Image, UnidentifiedImageError
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
@@ -51,6 +59,8 @@ TASK_STATUS_OPTIONS = ('pending', 'in_progress', 'completed', 'overdue')
 ALERT_PRIORITY_OPTIONS = ('low', 'medium', 'high')
 ALERT_STATUS_OPTIONS = ('open', 'read', 'resolved')
 VALIDATION_REVIEW_STATUS_OPTIONS = ('new', 'reviewed', 'resolved')
+ZONE_STATUS_OPTIONS = ('active', 'inactive')
+BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config.update(
@@ -62,6 +72,7 @@ app.config.update(
 )
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
 init_database_app(app)
 
@@ -195,9 +206,111 @@ def roles_required(*roles):
     return decorator
 
 
+def split_zone_names(value):
+    if value is None:
+        return []
+    names = []
+    for token in str(value).replace(';', ',').split(','):
+        token = token.strip()
+        if token:
+            names.append(token)
+    return names
+
+
+def zone_key(value):
+    return sanitize_text(value).lower()
+
+
+def unique_zone_names(names):
+    seen = set()
+    result = []
+    for name in names:
+        key = zone_key(name)
+        if key and key not in seen:
+            seen.add(key)
+            result.append(sanitize_text(name))
+    return result
+
+
+def city_head_assigned_zone_names(user):
+    if user is None or user['role'] != 'city_head':
+        return []
+    rows = query_all("SELECT name FROM zones WHERE city_head_id = ? ORDER BY name", (user['id'],))
+    return unique_zone_names([row['name'] for row in rows])
+
+
+def assigned_zone_keys(user):
+    return {zone_key(name) for name in city_head_assigned_zone_names(user)}
+
+
+def user_can_access_zone(user, zone_name):
+    if user['role'] == 'admin':
+        return True
+    if user['role'] == 'city_head':
+        return zone_key(zone_name) in assigned_zone_keys(user)
+    if user['role'] == 'staff':
+        return zone_key(zone_name) in {zone_key(name) for name in split_zone_names(user['zone'])}
+    return False
+
+
+def zone_filter_sql(user, column_name):
+    keys = sorted(assigned_zone_keys(user))
+    if not keys:
+        return '1 = 0', []
+    placeholders = ', '.join(['?'] * len(keys))
+    return f"LOWER(COALESCE({column_name}, '')) IN ({placeholders})", keys
+
+
+def ensure_city_head_assignment(user_id, zone_names):
+    now = utc_now()
+    cleaned_names = unique_zone_names(zone_names)
+    if not cleaned_names:
+        return
+    for name in cleaned_names:
+        execute(
+            """
+            INSERT OR IGNORE INTO zones (name, city, status, route_plan, notes, created_at, updated_at)
+            VALUES (?, '', 'active', '', 'Created while assigning a City Head', ?, ?)
+            """,
+            (name, now, now),
+        )
+        execute(
+            "UPDATE zones SET city_head_id = ?, updated_at = ? WHERE LOWER(name) = LOWER(?)",
+            (user_id, now, name),
+        )
+
+
+def sync_user_zone_assignments(user_id, role, zone_text):
+    if role != 'city_head':
+        execute("UPDATE zones SET city_head_id = NULL, updated_at = ? WHERE city_head_id = ?", (utc_now(), user_id))
+        return
+    zone_names = split_zone_names(zone_text)
+    if zone_names:
+        execute("UPDATE zones SET city_head_id = NULL, updated_at = ? WHERE city_head_id = ?", (utc_now(), user_id))
+        ensure_city_head_assignment(user_id, zone_names)
+
+
+def row_to_zone(row):
+    if row is None:
+        return None
+    return {
+        'id': row['id'],
+        'name': row['name'],
+        'city': row['city'] or '',
+        'cityHeadId': row['city_head_id'],
+        'cityHeadName': row['city_head_name'] or '',
+        'status': row['status'],
+        'routePlan': row['route_plan'] or '',
+        'notes': row['notes'] or '',
+        'createdAt': row['created_at'],
+        'updatedAt': row['updated_at'],
+    }
+
+
 def row_to_user(row):
     if row is None:
         return None
+    assigned_zones = city_head_assigned_zone_names(row) if row['role'] == 'city_head' else split_zone_names(row['zone'])
     return {
         'id': row['id'],
         'username': row['username'],
@@ -215,6 +328,7 @@ def row_to_user(row):
         'supervisorName': row['supervisor_name'] or '',
         'emergencyContact': row['emergency_contact'] or '',
         'notes': row['notes'] or '',
+        'assignedZones': assigned_zones,
         'createdAt': row['created_at'],
         'updatedAt': row['updated_at'],
     }
@@ -300,17 +414,24 @@ def row_to_validation(row):
         'sensorDistanceCm': row['sensor_distance_cm'],
         'sensorFillPercent': row['sensor_fill_percent'],
         'sensorLevel': row['sensor_level'] or 'unknown',
+        'sensor_level': row['sensor_level'] or 'unknown',
         'sensorSource': row['sensor_source'] or '',
         'sensorStatus': row['sensor_status'] or '',
         'aiLevel': row['ai_level'] or 'unknown',
+        'aiPredictedLevel': row['ai_level'] or 'unknown',
         'confidence': row['confidence'],
         'probabilities': probabilities,
         'match': row['match_result'] or 'Unavailable',
+        'differenceStatus': row['match_result'] or 'Unavailable',
         'reviewStatus': row['review_status'],
+        'validationStatus': row['review_status'],
         'reviewNotes': row['review_notes'] or '',
+        'remarks': row['review_notes'] or '',
         'createdByUserId': row['created_by_user_id'],
         'createdByName': row['created_by_name'] or '',
+        'validatedBy': row['created_by_user_id'],
         'createdAt': row['created_at'],
+        'validatedAt': row['created_at'],
         'timestamp': row['created_at'],
         'updatedAt': row['updated_at'],
     }
@@ -435,6 +556,11 @@ def parse_serial_line(line: str):
 
 def connect_serial_forever():
     global serial_connection
+    if serial is None:
+        with sensor_lock:
+            latest_sensor['status'] = 'pyserial is not installed. Install requirements.txt or use manual/HTTP sensor mode.'
+            latest_sensor['source'] = 'manual'
+        return
     while True:
         try:
             serial_connection = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
@@ -511,6 +637,8 @@ def start_sensor_worker():
 def load_model_once():
     global model
     if model is None:
+        if tf is None:
+            raise RuntimeError('TensorFlow is not installed. Install requirements.txt before running AI validation.')
         if not os.path.exists(MODEL_PATH):
             raise FileNotFoundError(f'Model not found at {MODEL_PATH}. Train the model first.')
         model = tf.keras.models.load_model(MODEL_PATH, compile=False)
@@ -622,6 +750,18 @@ def fetch_bins_for_user(user):
             """,
             (user['id'],),
         )
+    elif user['role'] == 'city_head':
+        clause, params = zone_filter_sql(user, 'bins.zone')
+        rows = query_all(
+            f"""
+            SELECT bins.*, users.full_name AS assigned_user_name
+            FROM bins
+            LEFT JOIN users ON users.id = bins.assigned_user_id
+            WHERE {clause}
+            ORDER BY bins.id DESC
+            """,
+            params,
+        )
     else:
         rows = query_all(
             """
@@ -632,6 +772,69 @@ def fetch_bins_for_user(user):
             """
         )
     return [row_to_bin(row) for row in rows]
+
+
+def fetch_zones_for_user(user):
+    if user['role'] == 'admin':
+        rows = query_all(
+            """
+            SELECT zones.*, users.full_name AS city_head_name
+            FROM zones
+            LEFT JOIN users ON users.id = zones.city_head_id
+            ORDER BY zones.name
+            """
+        )
+    elif user['role'] == 'city_head':
+        clause, params = zone_filter_sql(user, 'zones.name')
+        rows = query_all(
+            f"""
+            SELECT zones.*, users.full_name AS city_head_name
+            FROM zones
+            LEFT JOIN users ON users.id = zones.city_head_id
+            WHERE zones.city_head_id = ? OR {clause}
+            ORDER BY zones.name
+            """,
+            [user['id'], *params],
+        )
+    else:
+        names = split_zone_names(user['zone'])
+        if names:
+            keys = [zone_key(name) for name in names]
+            placeholders = ', '.join(['?'] * len(keys))
+            rows = query_all(
+                f"""
+                SELECT zones.*, users.full_name AS city_head_name
+                FROM zones
+                LEFT JOIN users ON users.id = zones.city_head_id
+                WHERE LOWER(zones.name) IN ({placeholders})
+                ORDER BY zones.name
+                """,
+                keys,
+            )
+        else:
+            rows = []
+    return [row_to_zone(row) for row in rows]
+
+
+def fetch_staff_for_city_head(user):
+    if user['role'] == 'admin':
+        rows = query_all("SELECT * FROM users WHERE role = 'staff' ORDER BY full_name")
+    elif user['role'] == 'city_head':
+        keys = sorted(assigned_zone_keys(user))
+        if not keys:
+            return []
+        placeholders = ', '.join(['?'] * len(keys))
+        rows = query_all(
+            f"""
+            SELECT * FROM users
+            WHERE role = 'staff' AND LOWER(COALESCE(zone, '')) IN ({placeholders})
+            ORDER BY full_name
+            """,
+            keys,
+        )
+    else:
+        rows = []
+    return [row_to_user(row) for row in rows]
 
 
 def fetch_tasks_for_user(user):
@@ -648,6 +851,27 @@ def fetch_tasks_for_user(user):
             ORDER BY tasks.id DESC
             """,
             (user['id'],),
+        )
+    elif user['role'] == 'city_head':
+        keys = sorted(assigned_zone_keys(user))
+        if not keys:
+            return []
+        placeholders = ', '.join(['?'] * len(keys))
+        params = [*keys, *keys, *keys]
+        rows = query_all(
+            f"""
+            SELECT tasks.*, assigned.full_name AS assigned_user_name, bins.bin_code AS bin_code,
+                   creator.full_name AS created_by_name
+            FROM tasks
+            LEFT JOIN users AS assigned ON assigned.id = tasks.assigned_user_id
+            LEFT JOIN bins ON bins.id = tasks.bin_id
+            LEFT JOIN users AS creator ON creator.id = tasks.created_by_user_id
+            WHERE LOWER(COALESCE(tasks.zone, '')) IN ({placeholders})
+               OR LOWER(COALESCE(bins.zone, '')) IN ({placeholders})
+               OR LOWER(COALESCE(assigned.zone, '')) IN ({placeholders})
+            ORDER BY tasks.id DESC
+            """,
+            params,
         )
     else:
         rows = query_all(
@@ -679,6 +903,40 @@ def fetch_alerts_for_user(user):
             """,
             (user['id'],),
         )
+    elif user['role'] == 'city_head':
+        keys = sorted(assigned_zone_keys(user))
+        if not keys:
+            rows = query_all(
+                """
+                SELECT alerts.*, users.full_name AS user_name, bins.bin_code AS bin_code,
+                       creator.full_name AS created_by_name
+                FROM alerts
+                LEFT JOIN users ON users.id = alerts.user_id
+                LEFT JOIN bins ON bins.id = alerts.bin_id
+                LEFT JOIN users AS creator ON creator.id = alerts.created_by_user_id
+                WHERE alerts.created_by_user_id = ?
+                ORDER BY alerts.id DESC
+                """,
+                (user['id'],),
+            )
+        else:
+            placeholders = ', '.join(['?'] * len(keys))
+            params = [user['id'], *keys, *keys]
+            rows = query_all(
+                f"""
+                SELECT alerts.*, users.full_name AS user_name, bins.bin_code AS bin_code,
+                       creator.full_name AS created_by_name
+                FROM alerts
+                LEFT JOIN users ON users.id = alerts.user_id
+                LEFT JOIN bins ON bins.id = alerts.bin_id
+                LEFT JOIN users AS creator ON creator.id = alerts.created_by_user_id
+                WHERE alerts.created_by_user_id = ?
+                   OR LOWER(COALESCE(bins.zone, '')) IN ({placeholders})
+                   OR LOWER(COALESCE(users.zone, '')) IN ({placeholders})
+                ORDER BY alerts.id DESC
+                """,
+                params,
+            )
     else:
         rows = query_all(
             """
@@ -697,6 +955,20 @@ def fetch_alerts_for_user(user):
 def fetch_users_for_reports(user):
     if user['role'] == 'admin':
         rows = query_all("SELECT * FROM users ORDER BY id DESC")
+    elif user['role'] == 'city_head':
+        keys = sorted(assigned_zone_keys(user))
+        if not keys:
+            rows = query_all("SELECT * FROM users WHERE id = ?", (user['id'],))
+        else:
+            placeholders = ', '.join(['?'] * len(keys))
+            rows = query_all(
+                f"""
+                SELECT * FROM users
+                WHERE id = ? OR (role = 'staff' AND LOWER(COALESCE(zone, '')) IN ({placeholders}))
+                ORDER BY id DESC
+                """,
+                [user['id'], *keys],
+            )
     else:
         rows = query_all(
             "SELECT * FROM users WHERE role IN ('city_head', 'staff') ORDER BY id DESC"
@@ -717,6 +989,22 @@ def fetch_validations_for_user(user):
             """,
             (user['id'],),
         )
+    elif user['role'] == 'city_head':
+        keys = sorted(assigned_zone_keys(user))
+        if not keys:
+            return []
+        placeholders = ', '.join(['?'] * len(keys))
+        rows = query_all(
+            f"""
+            SELECT validation_runs.*, bins.bin_code AS bin_code, users.full_name AS created_by_name
+            FROM validation_runs
+            LEFT JOIN bins ON bins.id = validation_runs.bin_id
+            LEFT JOIN users ON users.id = validation_runs.created_by_user_id
+            WHERE LOWER(COALESCE(bins.zone, '')) IN ({placeholders})
+            ORDER BY validation_runs.id DESC
+            """,
+            keys,
+        )
     else:
         rows = query_all(
             """
@@ -732,28 +1020,45 @@ def fetch_validations_for_user(user):
 
 def dashboard_payload(user):
     bins = fetch_bins_for_user(user)
+    zones = fetch_zones_for_user(user) if user['role'] in ('admin', 'city_head') else []
     tasks = fetch_tasks_for_user(user)
     alerts = fetch_alerts_for_user(user)
-    validations = fetch_validations_for_user(user)
+    validations = fetch_validations_for_user(user) if user['role'] == 'admin' else []
 
     if user['role'] == 'admin':
         users_count = query_one("SELECT COUNT(*) AS count FROM users")['count']
+        staff_count = query_one("SELECT COUNT(*) AS count FROM users WHERE role = 'staff'")['count']
+        city_head_count = query_one("SELECT COUNT(*) AS count FROM users WHERE role = 'city_head'")['count']
         matches = len([item for item in validations if item['match'] == 'Match'])
+        mismatches = len([item for item in validations if item['match'] == 'Mismatch'])
         accuracy = round((matches / len(validations)) * 100, 2) if validations else 0
         metrics = [
-            {'label': 'Users', 'value': users_count, 'subtext': 'Admins, city heads, and staff'},
-            {'label': 'Bins', 'value': len(bins), 'subtext': 'Managed in SQLite'},
-            {'label': 'Open Tasks', 'value': len([task for task in tasks if task['status'] != 'completed']), 'subtext': 'Need action'},
-            {'label': 'Validation Accuracy', 'value': f'{accuracy:.2f}%', 'subtext': 'AI versus ultrasonic'},
+            {'label': 'Total Users', 'value': users_count, 'subtext': 'All accounts'},
+            {'label': 'Total Staff', 'value': staff_count, 'subtext': 'Field team accounts'},
+            {'label': 'Total City Heads', 'value': city_head_count, 'subtext': 'Operational managers'},
+            {'label': 'Total Smart Bins', 'value': len(bins), 'subtext': 'All-zone infrastructure'},
+            {'label': 'Total Zones', 'value': len(zones), 'subtext': 'Configured service zones'},
+            {'label': 'System Health', 'value': 'Online', 'subtext': 'SQLite and Flask responding'},
+            {'label': 'AI Validation Status', 'value': f'{accuracy:.2f}%', 'subtext': 'AI versus sensor match rate'},
+            {'label': 'Sensor vs AI Discrepancies', 'value': mismatches, 'subtext': 'Mismatch records'},
         ]
+        role_title = 'Admin - System Controller & Validator'
+        role_description = 'Responsible for system setup, user management, smart bin configuration, AI validation, monitoring, backup, and all reports.'
     elif user['role'] == 'city_head':
-        staff_count = query_one("SELECT COUNT(*) AS count FROM users WHERE role = 'staff'")['count']
+        staff = fetch_staff_for_city_head(user)
+        completed = len([task for task in tasks if task['status'] == 'completed'])
+        progress = round((completed / len(tasks)) * 100, 2) if tasks else 0
+        overflow_alerts = len([item for item in alerts if item['priority'] == 'high' and item['status'] != 'resolved'])
         metrics = [
-            {'label': 'Staff Members', 'value': staff_count, 'subtext': 'Available in the system'},
-            {'label': 'Bins', 'value': len(bins), 'subtext': 'Visible to city head'},
-            {'label': 'Tasks', 'value': len(tasks), 'subtext': 'Assigned and tracked'},
-            {'label': 'Open Alerts', 'value': len([item for item in alerts if item['status'] == 'open']), 'subtext': 'Need attention'},
+            {'label': 'Assigned Zones', 'value': len(zones), 'subtext': 'City Head scope'},
+            {'label': 'Zone Bins', 'value': len(bins), 'subtext': 'Bins in assigned zones'},
+            {'label': 'Assigned Staff', 'value': len(staff), 'subtext': 'Staff in your zones'},
+            {'label': 'Collection Progress', 'value': f'{progress:.2f}%', 'subtext': 'Completed zone tasks'},
+            {'label': 'Overflow Alerts', 'value': overflow_alerts, 'subtext': 'High-priority unresolved'},
+            {'label': 'Zone Reports', 'value': len(tasks), 'subtext': 'Operational task records'},
         ]
+        role_title = 'City Head - Operational Manager'
+        role_description = 'Responsible for assigned-zone operations, staff task assignment, collection progress, overflow handling, and zone-specific reporting.'
     else:
         my_pending = len([task for task in tasks if task['status'] in ('pending', 'in_progress')])
         metrics = [
@@ -762,9 +1067,14 @@ def dashboard_payload(user):
             {'label': 'My Bins', 'value': len([bin_item for bin_item in bins if bin_item['assignedUserId'] == user['id']]), 'subtext': 'Directly assigned'},
             {'label': 'My Alerts', 'value': len(alerts), 'subtext': 'Targeted notifications'},
         ]
+        role_title = 'Staff'
+        role_description = 'Responsible for completing assigned collection work and updating task status.'
 
     return {
+        'roleTitle': role_title,
+        'roleDescription': role_description,
         'metrics': metrics,
+        'assignedZones': zones,
         'recentTasks': tasks[:5],
         'recentAlerts': alerts[:5],
         'recentValidations': validations[:5],
@@ -774,21 +1084,33 @@ def dashboard_payload(user):
 def lookups_payload(user):
     if user['role'] == 'admin':
         users = [row_to_user(row) for row in query_all("SELECT * FROM users ORDER BY full_name")]
+        bins = fetch_bins_for_user(user)
+        zones = fetch_zones_for_user(user)
+        city_heads = [item for item in users if item['role'] == 'city_head']
     else:
-        users = [row_to_user(row) for row in query_all("SELECT * FROM users WHERE role IN ('city_head', 'staff') ORDER BY full_name")]
+        users = fetch_staff_for_city_head(user) if user['role'] == 'city_head' else [
+            row_to_user(row) for row in query_all("SELECT * FROM users WHERE id = ?", (user['id'],))
+        ]
+        bins = fetch_bins_for_user(user)
+        zones = fetch_zones_for_user(user) if user['role'] == 'city_head' else []
+        city_heads = []
 
-    bins = fetch_bins_for_user(user if user['role'] == 'staff' else {'role': 'admin', 'id': user['id']})
     return {
         'roles': list(ROLE_OPTIONS),
         'userStatusOptions': list(STATUS_OPTIONS),
         'binStatusOptions': list(BIN_STATUS_OPTIONS),
+        'zoneStatusOptions': list(ZONE_STATUS_OPTIONS),
         'taskPriorityOptions': list(TASK_PRIORITY_OPTIONS),
         'taskStatusOptions': list(TASK_STATUS_OPTIONS),
         'alertPriorityOptions': list(ALERT_PRIORITY_OPTIONS),
         'alertStatusOptions': list(ALERT_STATUS_OPTIONS),
         'validationReviewStatusOptions': list(VALIDATION_REVIEW_STATUS_OPTIONS),
         'users': users,
+        'staffUsers': [item for item in users if item['role'] == 'staff'],
+        'cityHeads': city_heads,
         'bins': bins,
+        'zones': zones,
+        'zoneNames': [zone['name'] for zone in zones],
     }
 
 
@@ -797,8 +1119,156 @@ def generated_reports_payload(user):
         'users': fetch_users_for_reports(user),
         'bins': fetch_bins_for_user(user),
         'tasks': fetch_tasks_for_user(user),
-        'validations': fetch_validations_for_user(user),
+        'validations': fetch_validations_for_user(user) if user['role'] == 'admin' else [],
+        'zones': fetch_zones_for_user(user) if user['role'] in ('admin', 'city_head') else [],
     }
+
+
+def get_task_visibility_context(task_row):
+    bin_row = query_one("SELECT * FROM bins WHERE id = ?", (task_row['bin_id'],)) if task_row['bin_id'] else None
+    assigned_row = query_one("SELECT * FROM users WHERE id = ?", (task_row['assigned_user_id'],)) if task_row['assigned_user_id'] else None
+    return bin_row, assigned_row
+
+
+def city_head_can_access_task(user, task_row):
+    if user['role'] != 'city_head':
+        return True
+    if user_can_access_zone(user, task_row['zone']):
+        return True
+    bin_row, assigned_row = get_task_visibility_context(task_row)
+    if bin_row and user_can_access_zone(user, bin_row['zone']):
+        return True
+    if assigned_row and user_can_access_zone(user, assigned_row['zone']):
+        return True
+    return False
+
+
+def city_head_can_access_alert(user, alert_row):
+    if user['role'] != 'city_head':
+        return True
+    if alert_row['created_by_user_id'] == user['id']:
+        return True
+    bin_row = query_one("SELECT * FROM bins WHERE id = ?", (alert_row['bin_id'],)) if alert_row['bin_id'] else None
+    target_user = query_one("SELECT * FROM users WHERE id = ?", (alert_row['user_id'],)) if alert_row['user_id'] else None
+    if bin_row and user_can_access_zone(user, bin_row['zone']):
+        return True
+    if target_user and user_can_access_zone(user, target_user['zone']):
+        return True
+    return False
+
+
+def validate_city_head_bin_scope(user, bin_row):
+    if user['role'] == 'city_head' and (bin_row is None or not user_can_access_zone(user, bin_row['zone'])):
+        return api_error('bin is outside your assigned zones', 403)
+    return None
+
+
+def resolve_task_scope(payload, user, existing=None):
+    assigned_user_id = parse_int(
+        payload.get('assignedUserId'),
+        existing['assigned_user_id'] if existing else None,
+    )
+    bin_id = parse_int(payload.get('binId'), existing['bin_id'] if existing else None)
+    zone = sanitize_text(payload.get('zone'), existing['zone'] if existing else '')
+
+    bin_row = query_one("SELECT * FROM bins WHERE id = ?", (bin_id,)) if bin_id else None
+    if bin_id and bin_row is None:
+        return None, api_error('selected bin was not found', 404)
+
+    if bin_row:
+        if not zone:
+            zone = bin_row['zone'] or ''
+        elif bin_row['zone'] and zone_key(zone) != zone_key(bin_row['zone']):
+            return None, api_error('task zone must match the selected bin zone', 400)
+
+    assigned_user = query_one("SELECT * FROM users WHERE id = ?", (assigned_user_id,)) if assigned_user_id else None
+    if assigned_user_id and assigned_user is None:
+        return None, api_error('assigned user was not found', 404)
+    if assigned_user and assigned_user['role'] != 'staff':
+        return None, api_error('tasks can only be assigned to staff users', 400)
+
+    if user['role'] == 'city_head':
+        if not assigned_zone_keys(user):
+            return None, api_error('no zones are assigned to this City Head', 403)
+        if not zone:
+            return None, api_error('zone is required for City Head task assignment', 400)
+        if not user_can_access_zone(user, zone):
+            return None, api_error('task zone is outside your assigned zones', 403)
+        if bin_row:
+            scope_error = validate_city_head_bin_scope(user, bin_row)
+            if scope_error:
+                return None, scope_error
+        if assigned_user and assigned_user['zone'] and not user_can_access_zone(user, assigned_user['zone']):
+            return None, api_error('assigned staff is outside your assigned zones', 403)
+
+    return {
+        'zone': zone,
+        'bin_id': bin_id,
+        'assigned_user_id': assigned_user_id,
+    }, None
+
+
+def resolve_alert_scope(payload, user, existing=None):
+    target_user_id = parse_int(payload.get('userId'), existing['user_id'] if existing else None)
+    bin_id = parse_int(payload.get('binId'), existing['bin_id'] if existing else None)
+    target_user = query_one("SELECT * FROM users WHERE id = ?", (target_user_id,)) if target_user_id else None
+    bin_row = query_one("SELECT * FROM bins WHERE id = ?", (bin_id,)) if bin_id else None
+
+    if target_user_id and target_user is None:
+        return None, api_error('target user was not found', 404)
+    if bin_id and bin_row is None:
+        return None, api_error('selected bin was not found', 404)
+    if user['role'] == 'city_head':
+        if target_user and target_user['role'] != 'staff':
+            return None, api_error('City Heads can send operational alerts to staff only', 400)
+        if target_user and target_user['zone'] and not user_can_access_zone(user, target_user['zone']):
+            return None, api_error('target staff is outside your assigned zones', 403)
+        if bin_row:
+            scope_error = validate_city_head_bin_scope(user, bin_row)
+            if scope_error:
+                return None, scope_error
+
+    return {
+        'user_id': target_user_id,
+        'bin_id': bin_id,
+    }, None
+
+
+def system_monitoring_payload():
+    validations = fetch_validations_for_user({'role': 'admin', 'id': current_user()['id'], 'zone': ''})
+    mismatches = [item for item in validations if item['match'] == 'Mismatch']
+    return {
+        'status': 'online',
+        'databasePath': DATABASE_PATH,
+        'modelPath': MODEL_PATH,
+        'modelExists': os.path.exists(MODEL_PATH),
+        'sensor': get_sensor_snapshot(),
+        'counts': {
+            'users': query_one("SELECT COUNT(*) AS count FROM users")['count'],
+            'staff': query_one("SELECT COUNT(*) AS count FROM users WHERE role = 'staff'")['count'],
+            'cityHeads': query_one("SELECT COUNT(*) AS count FROM users WHERE role = 'city_head'")['count'],
+            'bins': query_one("SELECT COUNT(*) AS count FROM bins")['count'],
+            'zones': query_one("SELECT COUNT(*) AS count FROM zones")['count'],
+            'tasks': query_one("SELECT COUNT(*) AS count FROM tasks")['count'],
+            'alerts': query_one("SELECT COUNT(*) AS count FROM alerts")['count'],
+            'validations': len(validations),
+            'discrepancies': len(mismatches),
+        },
+    }
+
+
+def backup_payload():
+    files = []
+    for name in sorted(os.listdir(BACKUP_DIR), reverse=True):
+        if not name.endswith('.db'):
+            continue
+        path = os.path.join(BACKUP_DIR, name)
+        files.append({
+            'name': name,
+            'sizeBytes': os.path.getsize(path),
+            'updatedAt': datetime.fromtimestamp(os.path.getmtime(path)).isoformat(timespec='seconds'),
+        })
+    return {'backups': files}
 
 
 def update_bin_from_validation(bin_id, sensor_values):
@@ -874,6 +1344,122 @@ def api_lookups():
     return jsonify(lookups_payload(current_user()))
 
 
+@app.route('/api/zones')
+@roles_required('admin', 'city_head')
+def api_zones_list():
+    return jsonify(fetch_zones_for_user(current_user()))
+
+
+@app.route('/api/zones', methods=['POST'])
+@roles_required('admin')
+def api_zones_create():
+    payload = json_body()
+    name = sanitize_text(payload.get('name'))
+    if not name:
+        return jsonify({'error': 'zone name is required'}), 400
+
+    status = sanitize_text(payload.get('status'), 'active').lower()
+    if status not in ZONE_STATUS_OPTIONS:
+        return jsonify({'error': 'invalid zone status'}), 400
+    if query_one("SELECT id FROM zones WHERE LOWER(name) = LOWER(?)", (name,)):
+        return jsonify({'error': 'zone already exists'}), 400
+
+    city_head_id = parse_int(payload.get('cityHeadId'))
+    if city_head_id:
+        city_head = query_one("SELECT * FROM users WHERE id = ?", (city_head_id,))
+        if city_head is None or city_head['role'] != 'city_head':
+            return jsonify({'error': 'selected zone owner must be a City Head'}), 400
+
+    now = utc_now()
+    cursor = execute(
+        """
+        INSERT INTO zones (name, city, city_head_id, status, route_plan, notes, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            name,
+            sanitize_text(payload.get('city')),
+            city_head_id,
+            status,
+            sanitize_text(payload.get('routePlan')),
+            sanitize_text(payload.get('notes')),
+            now,
+            now,
+        ),
+    )
+    row = query_one(
+        """
+        SELECT zones.*, users.full_name AS city_head_name
+        FROM zones
+        LEFT JOIN users ON users.id = zones.city_head_id
+        WHERE zones.id = ?
+        """,
+        (cursor.lastrowid,),
+    )
+    return jsonify(row_to_zone(row)), 201
+
+
+@app.route('/api/zones/<int:zone_id>', methods=['PUT'])
+@roles_required('admin')
+def api_zones_update(zone_id):
+    payload = json_body()
+    existing = query_one("SELECT * FROM zones WHERE id = ?", (zone_id,))
+    if existing is None:
+        return jsonify({'error': 'zone not found'}), 404
+
+    name = sanitize_text(payload.get('name'), existing['name'])
+    status = sanitize_text(payload.get('status'), existing['status']).lower()
+    if status not in ZONE_STATUS_OPTIONS:
+        return jsonify({'error': 'invalid zone status'}), 400
+    duplicate = query_one("SELECT id FROM zones WHERE LOWER(name) = LOWER(?) AND id != ?", (name, zone_id))
+    if duplicate:
+        return jsonify({'error': 'zone already exists'}), 400
+
+    city_head_id = parse_int(payload.get('cityHeadId'), existing['city_head_id'])
+    if city_head_id:
+        city_head = query_one("SELECT * FROM users WHERE id = ?", (city_head_id,))
+        if city_head is None or city_head['role'] != 'city_head':
+            return jsonify({'error': 'selected zone owner must be a City Head'}), 400
+
+    now = utc_now()
+    execute(
+        """
+        UPDATE zones
+        SET name = ?, city = ?, city_head_id = ?, status = ?, route_plan = ?, notes = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            name,
+            sanitize_text(payload.get('city'), existing['city'] or ''),
+            city_head_id,
+            status,
+            sanitize_text(payload.get('routePlan'), existing['route_plan'] or ''),
+            sanitize_text(payload.get('notes'), existing['notes'] or ''),
+            now,
+            zone_id,
+        ),
+    )
+    row = query_one(
+        """
+        SELECT zones.*, users.full_name AS city_head_name
+        FROM zones
+        LEFT JOIN users ON users.id = zones.city_head_id
+        WHERE zones.id = ?
+        """,
+        (zone_id,),
+    )
+    return jsonify(row_to_zone(row))
+
+
+@app.route('/api/zones/<int:zone_id>', methods=['DELETE'])
+@roles_required('admin')
+def api_zones_delete(zone_id):
+    if query_one("SELECT id FROM zones WHERE id = ?", (zone_id,)) is None:
+        return jsonify({'error': 'zone not found'}), 404
+    execute("DELETE FROM zones WHERE id = ?", (zone_id,))
+    return jsonify({'success': True})
+
+
 @app.route('/api/profile', methods=['PUT'])
 @login_required
 def api_profile_update():
@@ -937,6 +1523,9 @@ def api_users_create():
         return jsonify({'error': 'full name, username, and password are required'}), 400
     if role not in ROLE_OPTIONS:
         return jsonify({'error': 'invalid role'}), 400
+    status = sanitize_text(payload.get('status'), 'active').lower()
+    if status not in STATUS_OPTIONS:
+        return jsonify({'error': 'invalid status'}), 400
     if query_one("SELECT id FROM users WHERE username = ?", (username,)):
         return jsonify({'error': 'username already exists'}), 400
 
@@ -958,7 +1547,7 @@ def api_users_create():
             sanitize_text(payload.get('city')),
             sanitize_text(payload.get('zone')),
             sanitize_text(payload.get('meta')),
-            sanitize_text(payload.get('status'), 'active').lower(),
+            status,
             sanitize_text(payload.get('employeeId')),
             sanitize_text(payload.get('shiftName')),
             sanitize_text(payload.get('vehicle')),
@@ -970,6 +1559,11 @@ def api_users_create():
         ),
     )
 
+    sync_user_zone_assignments(
+        cursor.lastrowid,
+        role,
+        payload.get('assignedZones') or payload.get('zone'),
+    )
     created = query_one("SELECT * FROM users WHERE id = ?", (cursor.lastrowid,))
     return jsonify(row_to_user(created)), 201
 
@@ -1031,6 +1625,11 @@ def api_users_update(user_id):
             (generate_password_hash(password), now, user_id),
         )
 
+    sync_user_zone_assignments(
+        user_id,
+        role,
+        payload.get('assignedZones') or payload.get('zone'),
+    )
     updated = query_one("SELECT * FROM users WHERE id = ?", (user_id,))
     return jsonify(row_to_user(updated))
 
@@ -1058,7 +1657,7 @@ def api_bins_list():
 
 
 @app.route('/api/bins', methods=['POST'])
-@roles_required('admin', 'city_head')
+@roles_required('admin')
 def api_bins_create():
     payload = json_body()
     bin_code = sanitize_text(payload.get('binCode')).upper()
@@ -1112,7 +1711,7 @@ def api_bins_create():
 
 
 @app.route('/api/bins/<int:bin_id>', methods=['PUT'])
-@roles_required('admin', 'city_head')
+@roles_required('admin')
 def api_bins_update(bin_id):
     payload = json_body()
     existing = query_one("SELECT * FROM bins WHERE id = ?", (bin_id,))
@@ -1168,7 +1767,7 @@ def api_bins_update(bin_id):
 
 
 @app.route('/api/bins/<int:bin_id>', methods=['DELETE'])
-@roles_required('admin', 'city_head')
+@roles_required('admin')
 def api_bins_delete(bin_id):
     if query_one("SELECT id FROM bins WHERE id = ?", (bin_id,)) is None:
         return jsonify({'error': 'bin not found'}), 404
@@ -1185,6 +1784,7 @@ def api_tasks_list():
 @app.route('/api/tasks', methods=['POST'])
 @roles_required('admin', 'city_head')
 def api_tasks_create():
+    user = current_user()
     payload = json_body()
     title = sanitize_text(payload.get('title'))
     if not title:
@@ -1194,6 +1794,9 @@ def api_tasks_create():
     status = sanitize_text(payload.get('status'), 'pending').lower()
     if priority not in TASK_PRIORITY_OPTIONS or status not in TASK_STATUS_OPTIONS:
         return jsonify({'error': 'invalid task priority or status'}), 400
+    scope, scope_error = resolve_task_scope(payload, user)
+    if scope_error:
+        return scope_error
 
     now = utc_now()
     cursor = execute(
@@ -1206,13 +1809,13 @@ def api_tasks_create():
         (
             title,
             sanitize_text(payload.get('description')),
-            sanitize_text(payload.get('zone')),
+            scope['zone'],
             priority,
             status,
             sanitize_text(payload.get('dueAt')),
-            parse_int(payload.get('assignedUserId')),
-            parse_int(payload.get('binId')),
-            current_user()['id'],
+            scope['assigned_user_id'],
+            scope['bin_id'],
+            user['id'],
             sanitize_text(payload.get('notes')),
             now,
             now,
@@ -1241,6 +1844,8 @@ def api_tasks_update(task_id):
     existing = query_one("SELECT * FROM tasks WHERE id = ?", (task_id,))
     if existing is None:
         return jsonify({'error': 'task not found'}), 404
+    if user['role'] == 'city_head' and not city_head_can_access_task(user, existing):
+        return jsonify({'error': 'forbidden'}), 403
 
     now = utc_now()
     if user['role'] == 'staff':
@@ -1258,6 +1863,9 @@ def api_tasks_update(task_id):
         status = sanitize_text(payload.get('status'), existing['status']).lower()
         if priority not in TASK_PRIORITY_OPTIONS or status not in TASK_STATUS_OPTIONS:
             return jsonify({'error': 'invalid task priority or status'}), 400
+        scope, scope_error = resolve_task_scope(payload, user, existing)
+        if scope_error:
+            return scope_error
         execute(
             """
             UPDATE tasks
@@ -1268,12 +1876,12 @@ def api_tasks_update(task_id):
             (
                 sanitize_text(payload.get('title'), existing['title']),
                 sanitize_text(payload.get('description'), existing['description'] or ''),
-                sanitize_text(payload.get('zone'), existing['zone'] or ''),
+                scope['zone'],
                 priority,
                 status,
                 sanitize_text(payload.get('dueAt'), existing['due_at'] or ''),
-                parse_int(payload.get('assignedUserId'), existing['assigned_user_id']),
-                parse_int(payload.get('binId'), existing['bin_id']),
+                scope['assigned_user_id'],
+                scope['bin_id'],
                 sanitize_text(payload.get('notes'), existing['notes'] or ''),
                 now,
                 task_id,
@@ -1298,8 +1906,11 @@ def api_tasks_update(task_id):
 @app.route('/api/tasks/<int:task_id>', methods=['DELETE'])
 @roles_required('admin', 'city_head')
 def api_tasks_delete(task_id):
-    if query_one("SELECT id FROM tasks WHERE id = ?", (task_id,)) is None:
+    existing = query_one("SELECT * FROM tasks WHERE id = ?", (task_id,))
+    if existing is None:
         return jsonify({'error': 'task not found'}), 404
+    if current_user()['role'] == 'city_head' and not city_head_can_access_task(current_user(), existing):
+        return jsonify({'error': 'forbidden'}), 403
     execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     return jsonify({'success': True})
 
@@ -1313,6 +1924,7 @@ def api_alerts_list():
 @app.route('/api/alerts', methods=['POST'])
 @roles_required('admin', 'city_head')
 def api_alerts_create():
+    user = current_user()
     payload = json_body()
     title = sanitize_text(payload.get('title'))
     message = sanitize_text(payload.get('message'))
@@ -1323,6 +1935,9 @@ def api_alerts_create():
         return jsonify({'error': 'title and message are required'}), 400
     if priority not in ALERT_PRIORITY_OPTIONS or status not in ALERT_STATUS_OPTIONS:
         return jsonify({'error': 'invalid alert priority or status'}), 400
+    scope, scope_error = resolve_alert_scope(payload, user)
+    if scope_error:
+        return scope_error
 
     now = utc_now()
     cursor = execute(
@@ -1336,9 +1951,9 @@ def api_alerts_create():
             message,
             priority,
             status,
-            parse_int(payload.get('userId')),
-            parse_int(payload.get('binId')),
-            current_user()['id'],
+            scope['user_id'],
+            scope['bin_id'],
+            user['id'],
             now,
             now,
         ),
@@ -1366,9 +1981,15 @@ def api_alerts_update(alert_id):
     existing = query_one("SELECT * FROM alerts WHERE id = ?", (alert_id,))
     if existing is None:
         return jsonify({'error': 'alert not found'}), 404
+    if user['role'] == 'city_head' and not city_head_can_access_alert(user, existing):
+        return jsonify({'error': 'forbidden'}), 403
 
     now = utc_now()
     if user['role'] == 'staff':
+        if existing['user_id'] not in (None, user['id']):
+            bin_row = query_one("SELECT assigned_user_id FROM bins WHERE id = ?", (existing['bin_id'],)) if existing['bin_id'] else None
+            if bin_row is None or bin_row['assigned_user_id'] != user['id']:
+                return jsonify({'error': 'forbidden'}), 403
         status = sanitize_text(payload.get('status'), existing['status']).lower()
         if status not in ALERT_STATUS_OPTIONS:
             return jsonify({'error': 'invalid alert status'}), 400
@@ -1378,6 +1999,9 @@ def api_alerts_update(alert_id):
         status = sanitize_text(payload.get('status'), existing['status']).lower()
         if priority not in ALERT_PRIORITY_OPTIONS or status not in ALERT_STATUS_OPTIONS:
             return jsonify({'error': 'invalid alert priority or status'}), 400
+        scope, scope_error = resolve_alert_scope(payload, user, existing)
+        if scope_error:
+            return scope_error
         execute(
             """
             UPDATE alerts
@@ -1389,8 +2013,8 @@ def api_alerts_update(alert_id):
                 sanitize_text(payload.get('message'), existing['message']),
                 priority,
                 status,
-                parse_int(payload.get('userId'), existing['user_id']),
-                parse_int(payload.get('binId'), existing['bin_id']),
+                scope['user_id'],
+                scope['bin_id'],
                 now,
                 alert_id,
             ),
@@ -1414,8 +2038,11 @@ def api_alerts_update(alert_id):
 @app.route('/api/alerts/<int:alert_id>', methods=['DELETE'])
 @roles_required('admin', 'city_head')
 def api_alerts_delete(alert_id):
-    if query_one("SELECT id FROM alerts WHERE id = ?", (alert_id,)) is None:
+    existing = query_one("SELECT * FROM alerts WHERE id = ?", (alert_id,))
+    if existing is None:
         return jsonify({'error': 'alert not found'}), 404
+    if current_user()['role'] == 'city_head' and not city_head_can_access_alert(current_user(), existing):
+        return jsonify({'error': 'forbidden'}), 403
     execute("DELETE FROM alerts WHERE id = ?", (alert_id,))
     return jsonify({'success': True})
 
@@ -1426,14 +2053,64 @@ def api_reports_list():
     return jsonify(generated_reports_payload(current_user()))
 
 
+@app.route('/api/system-monitoring')
+@roles_required('admin')
+def api_system_monitoring():
+    return jsonify(system_monitoring_payload())
+
+
+@app.route('/api/backup', methods=['GET'])
+@roles_required('admin')
+def api_backup_list():
+    return jsonify(backup_payload())
+
+
+@app.route('/api/backup', methods=['POST'])
+@roles_required('admin')
+def api_backup_create():
+    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    backup_name = f'smartwaste_backup_{timestamp}.db'
+    backup_path = os.path.join(BACKUP_DIR, backup_name)
+    shutil.copy2(DATABASE_PATH, backup_path)
+    payload = backup_payload()
+    payload['created'] = {
+        'name': backup_name,
+        'sizeBytes': os.path.getsize(backup_path),
+    }
+    return jsonify(payload), 201
+
+
+@app.route('/api/restore', methods=['POST'])
+@roles_required('admin')
+def api_restore_backup():
+    payload = json_body()
+    backup_name = secure_filename(sanitize_text(payload.get('backupName')))
+    if not backup_name:
+        return jsonify({'error': 'backupName is required'}), 400
+    backup_path = os.path.abspath(os.path.join(BACKUP_DIR, backup_name))
+    backup_root = os.path.abspath(BACKUP_DIR)
+    if not backup_path.startswith(backup_root) or not os.path.exists(backup_path):
+        return jsonify({'error': 'backup file was not found'}), 404
+
+    current_backup_name = f'before_restore_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.db'
+    shutil.copy2(DATABASE_PATH, os.path.join(BACKUP_DIR, current_backup_name))
+
+    existing_connection = g.pop('db', None)
+    if existing_connection is not None:
+        existing_connection.close()
+
+    shutil.copy2(backup_path, DATABASE_PATH)
+    return jsonify({'success': True, 'restoredFrom': backup_name, 'previousBackup': current_backup_name})
+
+
 @app.route('/api/validations')
-@login_required
+@roles_required('admin')
 def api_validations_list():
     return jsonify(fetch_validations_for_user(current_user()))
 
 
 @app.route('/api/validations/<int:validation_id>', methods=['PUT'])
-@roles_required('admin', 'city_head')
+@roles_required('admin')
 def api_validations_update(validation_id):
     payload = json_body()
     existing = query_one("SELECT * FROM validation_runs WHERE id = ?", (validation_id,))
@@ -1472,7 +2149,7 @@ def api_validations_update(validation_id):
 
 
 @app.route('/api/validations/<int:validation_id>', methods=['DELETE'])
-@roles_required('admin', 'city_head')
+@roles_required('admin')
 def api_validations_delete(validation_id):
     existing = query_one("SELECT * FROM validation_runs WHERE id = ?", (validation_id,))
     if existing is None:
@@ -1521,7 +2198,7 @@ def api_reading():
 
 
 @app.route('/api/validate', methods=['POST'])
-@login_required
+@roles_required('admin')
 def api_validate():
     if 'image' not in request.files:
         return jsonify({'error': 'image file is required'}), 400
@@ -1543,6 +2220,10 @@ def api_validate():
     try:
         prediction = predict_image_class(image_path)
     except FileNotFoundError as exc:
+        if os.path.exists(image_path):
+            os.remove(image_path)
+        return jsonify({'error': str(exc)}), 400
+    except RuntimeError as exc:
         if os.path.exists(image_path):
             os.remove(image_path)
         return jsonify({'error': str(exc)}), 400

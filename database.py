@@ -51,6 +51,19 @@ CREATE TABLE IF NOT EXISTS bins (
     FOREIGN KEY (assigned_user_id) REFERENCES users(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS zones (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    city TEXT,
+    city_head_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+    route_plan TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (city_head_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
@@ -152,6 +165,8 @@ def init_database():
     connection.execute('PRAGMA foreign_keys = ON')
     connection.executescript(SCHEMA)
     ensure_bin_columns(connection)
+    ensure_zone_table(connection)
+    seed_zones_from_existing_data(connection)
     connection.execute("DROP TABLE IF EXISTS reports")
 
     admin_exists = connection.execute(
@@ -196,6 +211,90 @@ def ensure_bin_columns(connection):
     for name, statement in additions.items():
         if name not in columns:
             connection.execute(statement)
+
+
+def ensure_zone_table(connection):
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS zones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            city TEXT,
+            city_head_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+            route_plan TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (city_head_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    columns = {row['name'] for row in connection.execute("PRAGMA table_info(zones)").fetchall()}
+    additions = {
+        'city': "ALTER TABLE zones ADD COLUMN city TEXT",
+        'city_head_id': "ALTER TABLE zones ADD COLUMN city_head_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
+        'status': "ALTER TABLE zones ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive'))",
+        'route_plan': "ALTER TABLE zones ADD COLUMN route_plan TEXT",
+        'notes': "ALTER TABLE zones ADD COLUMN notes TEXT",
+        'created_at': "ALTER TABLE zones ADD COLUMN created_at TEXT",
+        'updated_at': "ALTER TABLE zones ADD COLUMN updated_at TEXT",
+    }
+    for name, statement in additions.items():
+        if name not in columns:
+            connection.execute(statement)
+
+
+def split_zone_names(value):
+    if value is None:
+        return []
+    names = []
+    for token in str(value).replace(';', ',').split(','):
+        token = token.strip()
+        if token:
+            names.append(token)
+    return names
+
+
+def seed_zones_from_existing_data(connection):
+    now = utc_now()
+    zone_names = set()
+    existing_zone_count = connection.execute("SELECT COUNT(*) AS count FROM zones").fetchone()['count']
+
+    for table in ('bins', 'tasks'):
+        for row in connection.execute(f"SELECT DISTINCT zone FROM {table} WHERE COALESCE(TRIM(zone), '') != ''").fetchall():
+            zone_names.update(split_zone_names(row['zone']))
+
+    for row in connection.execute(
+        "SELECT DISTINCT zone FROM users WHERE role IN ('city_head', 'staff') AND COALESCE(TRIM(zone), '') != ''"
+    ).fetchall():
+        zone_names.update(split_zone_names(row['zone']))
+
+    for name in sorted(zone_names):
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO zones (name, city, status, route_plan, notes, created_at, updated_at)
+            VALUES (?, '', 'active', '', 'Migrated from existing zone text fields', ?, ?)
+            """,
+            (name, now, now),
+        )
+
+    city_heads = connection.execute("SELECT id, zone FROM users WHERE role = 'city_head'").fetchall()
+    for city_head in city_heads:
+        for name in split_zone_names(city_head['zone']):
+            connection.execute(
+                "UPDATE zones SET city_head_id = ?, updated_at = ? WHERE LOWER(name) = LOWER(?)",
+                (city_head['id'], now, name),
+            )
+
+    unassigned_count = connection.execute(
+        "SELECT COUNT(*) AS count FROM zones WHERE city_head_id IS NULL"
+    ).fetchone()['count']
+    if existing_zone_count == 0 and len(city_heads) == 1 and unassigned_count > 0:
+        connection.execute(
+            "UPDATE zones SET city_head_id = ?, updated_at = ? WHERE city_head_id IS NULL",
+            (city_heads[0]['id'], now),
+        )
 
 
 def init_app(app):

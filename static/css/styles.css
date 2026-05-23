@@ -12,6 +12,12 @@
   --sw-success: #198754;
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 body {
   background: linear-gradient(180deg, #f7fbf7 0%, #eef8ef 100%);
   color: var(--sw-text);
@@ -60,6 +66,7 @@ body {
   min-height: 100vh;
   display: grid;
   grid-template-columns: 300px 1fr;
+  min-width: 0;
 }
 
 .sidebar-panel {
@@ -69,6 +76,8 @@ body {
   flex-direction: column;
   justify-content: space-between;
   gap: 1rem;
+  overflow-y: auto;
+  min-width: 0;
 }
 
 .sidebar-brand {
@@ -97,9 +106,10 @@ body {
 .sidebar-panel .nav-link {
   border-radius: 0.9rem;
   color: rgba(255, 255, 255, 0.82);
-  padding: 0.85rem 1rem;
+  padding: 0.72rem 0.9rem;
   font-weight: 500;
   transition: all 0.2s ease;
+  white-space: normal;
 }
 
 .sidebar-panel .nav-link:hover,
@@ -112,6 +122,7 @@ body {
 .content-panel {
   padding: 1.5rem;
   background: linear-gradient(180deg, #f6fbf6 0%, #eef7ef 100%);
+  min-width: 0;
 }
 
 .topbar {
@@ -465,6 +476,7 @@ div.dt-button.report-export-btn.active span,
 .section-grid {
   display: grid;
   gap: 1.25rem;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .section-grid.metrics-4 {
@@ -588,7 +600,7 @@ div.dt-button.report-export-btn.active span,
   .section-grid.metrics-5,
   .section-grid.two-col,
   .section-grid.three-col {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .quick-action-grid {

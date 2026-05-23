@@ -5,6 +5,9 @@ This project now uses a real SQLite database instead of browser-side static demo
 It includes:
 - role-based login
 - SQLite-backed CRUD for users, bins, tasks, alerts, and AI validation history
+- Admin and City Head role separation with backend-enforced zone filtering
+- Admin-only zone setup, smart bin configuration, AI validation, discrepancy reports, monitoring, and backup/restore
+- City Head assigned-zone operations, staff-only task assignment, collection progress, overflow handling, and operational reports
 - generated reports for users, bins, tasks, and validation runs with date filters and export options
 - admin ability to create city heads and staff accounts
 - trained waste-level model for `low`, `medium`, `high`
@@ -32,6 +35,7 @@ Tables created automatically:
 - `tasks`
 - `alerts`
 - `validation_runs`
+- `zones`
 
 ## Default login
 
@@ -56,11 +60,11 @@ Admin:
 - generate filtered exports for users, bins, tasks, and validation runs
 
 City Head:
-- create, read, update, delete bins
-- create, read, update, delete tasks
-- create, read, update, delete alerts
-- read and review AI validations
-- generate filtered exports for users, bins, tasks, and validation runs
+- read assigned zones only
+- read bins inside assigned zones only
+- assign tasks to staff users only
+- update assigned-zone tasks and overflow alerts
+- generate assigned-zone operational reports only
 
 Staff:
 - read assigned bins
@@ -71,7 +75,13 @@ Staff:
 
 ## Dataset and model
 
-Your trained model artifacts are here:
+The app now uses the MobileNetV2 Keras model shared with this project by default:
+
+- `C:\Users\Noman\Downloads\mobilenetv2_0.79M_final.keras`
+
+You can override this with the `MODEL_PATH` environment variable if needed.
+
+Older trained model artifacts may still exist in the project folder, but the Flask app does not use them by default:
 
 - [waste_level_model.keras](C:/Users/Noman/Desktop/db/saved_models/waste_level_model.keras)
 - [training_summary.json](C:/Users/Noman/Desktop/db/saved_models/training_summary.json)
