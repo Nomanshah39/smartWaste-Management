@@ -4,9 +4,7 @@
       { key: 'dashboard', label: 'Dashboard', icon: 'bi-speedometer2' },
       { key: 'users', label: 'User Management', icon: 'bi-people' },
       { key: 'bins', label: 'Smart Bin Management', icon: 'bi-trash3' },
-      { key: 'zones', label: 'Zone & Route Setup', icon: 'bi-map' },
       { key: 'validations', label: 'AI Validation', icon: 'bi-cpu' },
-      { key: 'discrepancy_reports', label: 'Discrepancy Reports', icon: 'bi-exclamation-triangle' },
       { key: 'reports', label: 'All Reports', icon: 'bi-bar-chart' }
     ],
     city_head: [
@@ -354,7 +352,6 @@
       case 'users': return api('/api/users');
       case 'bins': return api('/api/bins');
       case 'bin_fill_levels': return api('/api/bins');
-      case 'zones': return api('/api/zones');
       case 'assigned_zones': return api('/api/zones');
       case 'tasks': return api('/api/tasks');
       case 'collection_progress': return api('/api/tasks');
@@ -365,7 +362,6 @@
       case 'zone_reports': return api('/api/reports');
       case 'operational_reports': return api('/api/reports');
       case 'validations': return api('/api/validations');
-      case 'discrepancy_reports': return api('/api/validations');
       case 'staff_performance': return api('/api/reports');
       case 'shift_route_schedule': return api('/api/reports');
       case 'profile': return (await api('/api/auth/me')).user;
@@ -379,7 +375,6 @@
       users: 'User Management',
       bins: 'Bin Management',
       bin_fill_levels: 'Bin Fill Levels',
-      zones: 'Zone & Route Setup',
       assigned_zones: 'Assigned Zones',
       tasks: 'Task Management',
       collection_progress: 'Collection Progress',
@@ -390,7 +385,6 @@
       zone_reports: 'Zone Reports',
       operational_reports: 'Operational Reports',
       validations: 'AI Validation',
-      discrepancy_reports: 'Sensor vs AI Discrepancy Reports',
       staff_performance: 'Staff Performance',
       shift_route_schedule: 'Shift & Route Schedule',
       profile: 'Profile'
@@ -403,7 +397,6 @@
       case 'users': return renderUsersPage(data);
       case 'bins': return renderBinsPage(data);
       case 'bin_fill_levels': return renderBinsPage(data, { readOnly: true, title: 'Assigned-Zone Bin Fill Levels' });
-      case 'zones': return renderZonesPage(data);
       case 'assigned_zones': return renderZonesPage(data, { readOnly: true, title: 'Assigned Zones' });
       case 'tasks': return renderTasksPage(data);
       case 'collection_progress': return renderCollectionProgressPage(data);
@@ -414,7 +407,6 @@
       case 'zone_reports': return renderReportsPage(data, { title: 'Zone Reports', cityHeadMode: true });
       case 'operational_reports': return renderReportsPage(data, { title: 'Operational Reports', cityHeadMode: true });
       case 'validations': return renderValidationsPage(data);
-      case 'discrepancy_reports': return renderDiscrepancyReportsPage(data);
       case 'staff_performance': return renderStaffPerformancePage(data);
       case 'shift_route_schedule': return renderShiftRouteSchedulePage(data);
       case 'profile': return renderProfilePage(data);
@@ -645,7 +637,6 @@
       ? [
         ['users', 'User Management', 'btn-success'],
         ['bins', 'Smart Bins', 'btn-outline-success'],
-        ['zones', 'Zone & Route Setup', 'btn-outline-secondary'],
         ['validations', 'AI Validation', 'btn-outline-danger'],
         ['reports', 'All Reports', 'btn-outline-dark']
       ]
@@ -756,7 +747,6 @@
                 isAdmin
                   ? [
                     ['All Reports', 'Users, bins, zones, tasks, and validation runs', 'System-wide audit and exports'],
-                    ['Discrepancy Reports', 'Sensor versus AI mismatches', 'Validation and calibration review'],
                     ['AI Validation', 'Image analysis and sensor comparison', 'Validation and calibration review']
                   ]
                   : [
@@ -1250,7 +1240,7 @@
 
     return `
       <div class="section-grid">
-        ${renderPageHero(options.title || 'Zone & Route Setup', state.user.role === 'city_head' ? 'Only assigned zones and route plans are visible.' : 'Create zones, assign City Heads, and maintain route setup details.')}
+        ${renderPageHero(options.title || 'Assigned Zones', state.user.role === 'city_head' ? 'Only assigned zones and route plans are visible.' : 'View zone assignment details.')}
         ${renderMetricCards([
           { label: 'Zones', value: zones.length, subtext: 'Visible zone records' },
           { label: 'Active', value: zones.filter(zone => zone.status === 'active').length, subtext: 'Operational zones' },
@@ -1302,30 +1292,6 @@
             tasks.map(task => [task.title, task.zone || '-', task.assignedUserName || '-', renderStatusBadge(task.priority), renderStatusBadge(task.status), task.dueAt || '-', task.binCode || '-']),
             'No collection tasks found',
             { datatable: true, tableId: 'collection-progress-table', searchPlaceholder: 'Search collection progress' }
-          )}
-        </div>
-      </div>
-    `;
-  }
-
-  function renderDiscrepancyReportsPage(validations) {
-    const discrepancies = validations.filter(item => item.match === 'Mismatch');
-    return `
-      <div class="section-grid">
-        ${renderPageHero('Sensor vs AI Discrepancy Reports', 'Admin-only review of mismatches between sensor readings and AI image predictions.')}
-        ${renderMetricCards([
-          { label: 'Validation Runs', value: validations.length, subtext: 'All saved runs' },
-          { label: 'Discrepancies', value: discrepancies.length, subtext: 'Sensor/AI mismatches' },
-          { label: 'Pending Review', value: discrepancies.filter(item => item.reviewStatus === 'new').length, subtext: 'Need validation' },
-          { label: 'Resolved', value: discrepancies.filter(item => item.reviewStatus === 'resolved').length, subtext: 'Closed items' }
-        ])}
-        <div class="content-card">
-          <div class="card-title-row"><div><h5>Discrepancies</h5><div class="text-muted small">Use this list for validation reports and calibration decisions</div></div></div>
-          ${renderEntityTable(
-            ['Bin', 'Location', 'AI Level', 'Sensor Level', 'Difference', 'Review', 'Created'],
-            discrepancies.map(item => [item.binCode || '-', item.location || '-', item.aiLevel || '-', item.sensorLevel || '-', renderStatusBadge(item.match), renderStatusBadge(item.reviewStatus), formatDateTime(item.createdAt)]),
-            'No discrepancies found',
-            { datatable: true, tableId: 'discrepancy-table', searchPlaceholder: 'Search discrepancies', exportable: true, exportTitle: 'Sensor vs AI Discrepancies' }
           )}
         </div>
       </div>
@@ -1712,7 +1678,6 @@
       case 'users': mountUsersPage(data); break;
       case 'bins': mountBinsPage(data); break;
       case 'bin_fill_levels': break;
-      case 'zones': mountZonesPage(data); break;
       case 'assigned_zones': break;
       case 'tasks': mountTasksPage(data); break;
       case 'collection_progress': break;
@@ -1723,7 +1688,6 @@
       case 'zone_reports': mountReportsPage(data); break;
       case 'operational_reports': mountReportsPage(data); break;
       case 'validations': await mountValidationsPage(data); break;
-      case 'discrepancy_reports': break;
       case 'staff_performance': break;
       case 'shift_route_schedule': break;
       case 'profile': mountProfilePage(); break;
