@@ -5,7 +5,11 @@ DATASET_ZIP_PATH = os.path.join(BASE_DIR, 'FINAL_3_LEVEL_DATASET.zip')
 DATASET_DIR = os.path.join(BASE_DIR, 'FINAL_3_LEVEL_DATASET')
 DATABASE_PATH = os.path.join(BASE_DIR, 'smartwaste.db')
 MODEL_DIR = os.path.join(BASE_DIR, 'saved_models')
-SHARED_MODEL_PATH = os.path.join(os.path.expanduser('~'), 'Downloads', 'mobilenetv2_0.79M_final.keras')
+SHARED_MODEL_PATH = os.path.join(
+    BASE_DIR,
+    "saved_models",
+    "waste_level_model.keras"
+)
 MODEL_PATH = os.getenv('MODEL_PATH', SHARED_MODEL_PATH)
 TRAINING_SUMMARY_PATH = os.path.join(MODEL_DIR, 'training_summary.json')
 TRAINING_PLOT_PATH = os.path.join(MODEL_DIR, 'training_curves.png')
